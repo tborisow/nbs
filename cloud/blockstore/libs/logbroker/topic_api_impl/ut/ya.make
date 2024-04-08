@@ -5,8 +5,8 @@ INCLUDE(${ARCADIA_ROOT}/cloud/storage/core/tests/recipes/medium.inc)
 IF (OPENSOURCE)
     # TODO(NBS-4760): fix tests and remove tags
     TAG(
-        ya:not_autocheck
-        ya:manual
+#        ya:not_autocheck
+#        ya:manual
     )
 ENDIF()
 
