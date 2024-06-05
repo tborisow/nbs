@@ -258,7 +258,8 @@ def setup(
         nrd_device_count=1,
         rack='',
         storage_config_patches=None,
-        server_config_patch=TServerConfig()):
+        server_config_patch=TServerConfig(),
+        restart_interval=None):
     server = TServerAppConfig()
     server.ServerConfig.CopyFrom(server_config_patch)
     server.ServerConfig.ThreadsCount = thread_count()
@@ -272,7 +273,8 @@ def setup(
         use_in_memory_pdisks=True,
         with_nrd=with_nrd,
         nrd_device_count=nrd_device_count,
-        rack=rack)
+        rack=rack,
+        restart_interval=restart_interval)
 
     env.results_path = yatest_common.output_path() + "/results.txt"
     env.results_file = open(env.results_path, "w")
@@ -1117,6 +1119,76 @@ def test_nbs_with_endpoint_proxy_uds():
         "--endpoint-proxy-unix-socket-path", ep_sock, cwd=env.nbs_cwd)
 
     run("stopendpoint", "--socket", vol_sock)
+
+    ret = common.canonical_file(env.results_path, local=True)
+    tear_down(env)
+    return ret
+
+
+def find_free_nbd_device():
+    for path in Path('/sys/block/').glob('nbd*')
+        if (path / 'pid').exists():
+            continue
+        else:
+            return '/dev/' + path.parts()[-1]
+        raise Exception("unable to find free nbd device")
+
+
+def test_nbd_reconfigure():
+    subprocess.call(f'sudo modprobe nbd nbds_max=1024')
+
+    sock = "vol-%s.sock" % hash(common.context.test_name)
+
+    endpoints_dir = os.path.join(
+        common.output_path(),
+        "endpoints-%s" % hash(common.context.test_name))
+
+    mount_dir = os.path.join(
+        common.output_path(),
+        "mount-%s" %s hash(common.context.text_name))
+
+    server_config = TServerConfig()
+    server_config.EndpointProxySocketPath = ep_sock
+    server_config.NbdEnabled = True
+    server_config.EndpointStorageType = EEndpointStorageType.ENDPOINT_STORAGE_FILE
+    server_config.EndpointStorageDir = endpoints_dir
+    server_config.NbdNetlink = true
+    server_config.NbdRequestTimeout = 5
+
+    restart_interval = 10
+    io_duration = 30
+
+    env, run = setup(
+        server_config_patch=server_config,
+        restart_interval=restart_interval)
+
+    device = find_free_nbd_device()
+
+    run("createvolume",
+        "--disk-id", "vol0",
+        "--blocks-count", str(BLOCKS_COUNT))
+
+    run("startendpoint",
+        "--socket", sock,
+        "--disk-id", "vol0",
+        "--ipc-type", "nbd",
+        "--nbd-device", device,
+        "--persistent",
+        "--mount-mode", "local")
+
+    file_1 = os.path.join(mount_dir, "file_1")
+    file_2 = os.path.join(mount_dir, "file_2")
+
+    subprocess.call(f'sudo mkfs.ext4 {device}')
+    subprocess.call(f'sudo mount {device} {mount_dir}')
+
+    subprocess.call(f"timeout {io_duration} dd oflag=direct if=/dev/urandom of={file_1}")
+    subprocess.call(f"dd iflag=direct oflag=direct if={file_1} of={file_2} bs=4k count=1024")
+
+    assert files_equal(file_1, file_2)
+
+    subprocess.call(f'umount {device}')
+    run("stopendpoint", "--socket", sock)
 
     ret = common.canonical_file(env.results_path, local=True)
     tear_down(env)

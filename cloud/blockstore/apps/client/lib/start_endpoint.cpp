@@ -182,8 +182,8 @@ public:
             .NoArgument()
             .SetFlag(&Persistent);
 
-        Opts.AddLongOption("nbd-device", "nbd device file which nbd-client connected to")
-            .RequiredArgument("STR")
+        const auto& device = Opts.AddLongOption("nbd-device", "configure nbd device for this endpoint")
+            .OptionalArgument("STR")
             .StoreResult(&NbdDeviceFile);
     }
 
@@ -284,6 +284,14 @@ private:
 
         if (MountModeStr && !GetMountMode(MountModeStr)) {
             STORAGE_ERROR("Unknown mount mode: " << MountModeStr.Quote());
+            return false;
+        }
+
+        if (ParseResultPtr->FindLongOptParseResult("nbd-device") &&
+            !NbdDeviceFile)
+        {
+            NbdDeviceFile = FindFreeNbdDevice();
+            STORAGE_ERROR("unable to find free nbd device");
             return false;
         }
 
