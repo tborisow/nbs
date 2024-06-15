@@ -3602,24 +3602,66 @@ TString TDiskRegistryState::MarkDeviceAsClean(
     return PendingCleanup.EraseDevice(uuid);
 }
 
+TVector<TString> TDiskRegistryState::MarkDevicesAsClean(
+    TInstant now,
+    TDiskRegistryDatabase& db,
+    const TVector<TDeviceId>& uuids)
+{
+    for (const auto& uuid: uuids) {
+        DeviceList.MarkDeviceAsClean(uuid);
+        db.DeleteDirtyDevice(uuid);
+
+        if (!DeviceList.IsSuspendedDevice(uuid)) {
+            db.DeleteSuspendedDevice(uuid);
+        }
+    }
+
+    TryUpdateDevices(now, db, uuids);
+
+    TVector<TString> ret;
+    ret.reserve(uuids.size());
+    for (const auto& uuid: uuids) {
+        ret.push_back(PendingCleanup.EraseDevice(uuid));
+    }
+
+    return ret;
+}
+
 bool TDiskRegistryState::TryUpdateDevice(
     TInstant now,
     TDiskRegistryDatabase& db,
     const TDeviceId& uuid)
 {
+    return !TryUpdateDevices(now, db, {uuid}).empty();
+}
+
+TVector<TDiskRegistryState::TDeviceId> TDiskRegistryState::TryUpdateDevices(
+    TInstant now,
+    TDiskRegistryDatabase& db,
+    const TVector<TDeviceId>& uuids)
+{
     Y_UNUSED(now);
 
-    auto [agent, device] = FindDeviceLocation(uuid);
-    if (!agent || !device) {
-        return false;
+    TVector<TDeviceId> ret;
+    ret.reserve(uuids.size());
+
+    TMap<TString, NProto::TAgentConfig*> agentsMap;
+    for(const auto& uuid : uuids) {
+        auto [agent, device] = FindDeviceLocation(uuid);
+        if (!agent || !device) {
+            continue;
+        }
+        ret.push_back(uuid);
+        agentsMap.emplace(agent->agentid(), agent);
+        AdjustDeviceIfNeeded(*device, {});
     }
 
-    AdjustDeviceIfNeeded(*device, {});
+    for(auto& [agentId, agent] : agentsMap) {
+        UpdateAgent(db, *agent);
+        DeviceList.UpdateDevices(*agent, DevicePoolConfigs);
+    }
 
-    UpdateAgent(db, *agent);
-    DeviceList.UpdateDevices(*agent, DevicePoolConfigs);
-
-    return true;
+    return ret;
 }
 
 TVector<TString> TDiskRegistryState::CollectBrokenDevices(
