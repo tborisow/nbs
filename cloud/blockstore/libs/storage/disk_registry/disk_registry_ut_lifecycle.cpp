@@ -521,6 +521,85 @@ Y_UNIT_TEST_SUITE(TDiskRegistryTest)
         UNIT_ASSERT_VALUES_EQUAL(cleanDevices[2], "uuid-3");
     }
 
+    Y_UNIT_TEST(ShouldSecureEraseWithDifferentPools)
+    {
+        auto agent1 = CreateAgentConfig(
+            "agent-1",
+            {Device("dev-1", "uuid-1", "rack-1", 10_GB) |
+                 WithPool("pool-1", NProto::DEVICE_POOL_KIND_LOCAL),
+             Device("dev-2", "uuid-2", "rack-1", 10_GB) |
+                 WithPool("pool-2", NProto::DEVICE_POOL_KIND_LOCAL)});
+
+        auto runtime = TTestRuntimeBuilder().WithAgents({agent1}).Build();
+
+        TDiskRegistryClient diskRegistry(*runtime);
+        diskRegistry.WaitReady();
+        diskRegistry.SetWritableState(true);
+
+        diskRegistry.UpdateConfig(
+            [&]
+            {
+                auto config = CreateRegistryConfig(0, {agent1});
+
+                auto* pool1 = config.AddDevicePoolConfigs();
+                pool1->SetName("pool-1");
+                pool1->SetKind(NProto::DEVICE_POOL_KIND_LOCAL);
+                pool1->SetAllocationUnit(10_GB);
+
+                auto* pool2 = config.AddDevicePoolConfigs();
+                pool2->SetName("pool-2");
+                pool2->SetKind(NProto::DEVICE_POOL_KIND_LOCAL);
+                pool2->SetAllocationUnit(10_GB);
+
+                return config;
+            }());
+
+        RegisterAgents(*runtime, 1);
+        WaitForAgents(*runtime, 1);
+
+        diskRegistry.ResumeDevice("agent-1", "dev-1", /*dryRun=*/false);
+        diskRegistry.ResumeDevice("agent-1", "dev-2", /*dryRun=*/false);
+
+        WaitForSecureErase(*runtime, {agent1});
+
+        agent1.MutableDevices()->Mutable(0)->SetNodeId(runtime->GetNodeId(0));
+        agent1.MutableDevices()->Mutable(1)->SetNodeId(runtime->GetNodeId(0));
+
+        TVector<NProto::TDeviceConfig> devices = {
+            agent1.GetDevices()[0],
+            agent1.GetDevices()[1]};
+
+        TVector<TString> cleanDevices;
+        ui32 cleanupRequestsNum = 0;
+
+        runtime->SetObserverFunc(
+            [&cleanDevices, &cleanupRequestsNum](TAutoPtr<IEventHandle>& event)
+            {
+                switch (event->GetTypeRewrite()) {
+                    case TEvDiskRegistryPrivate::EvCleanupDevicesRequest: {
+                        auto& msg = *event->Get<
+                            TEvDiskRegistryPrivate::TEvCleanupDevicesRequest>();
+                        for (auto& device: msg.Devices) {
+                            cleanDevices.push_back(device);
+                        }
+                        cleanupRequestsNum += 1;
+                        break;
+                    }
+                }
+
+                return TTestActorRuntime::DefaultObserverFunc(event);
+            });
+
+        UNIT_ASSERT_VALUES_EQUAL(
+            2,
+            diskRegistry.SecureErase(devices)->CleanDevices);
+        UNIT_ASSERT_VALUES_EQUAL(2, cleanupRequestsNum);
+
+        UNIT_ASSERT_VALUES_EQUAL(cleanDevices.size(), 2);
+        UNIT_ASSERT_VALUES_EQUAL(cleanDevices[0], "uuid-1");
+        UNIT_ASSERT_VALUES_EQUAL(cleanDevices[1], "uuid-2");
+    }
+
     Y_UNIT_TEST(ShouldHandleUndeliveredSecureEraseRequests)
     {
         const TVector agents {
