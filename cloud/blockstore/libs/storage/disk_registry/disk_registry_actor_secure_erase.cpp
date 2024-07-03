@@ -19,6 +19,11 @@ namespace {
 class TSecureEraseActor final
     : public TActorBootstrapped<TSecureEraseActor>
 {
+public:
+    struct TSecureEraseActorsGroup {
+        ui32 ActorsInProgress;
+        ui32 CleanDevices;
+    };
 private:
     const TActorId Owner;
     const TRequestInfoPtr Request;
@@ -29,12 +34,15 @@ private:
 
     int PendingRequests = 0;
 
+    std::shared_ptr<TSecureEraseActorsGroup> SecureEraseActorsGroup;
+
 public:
     TSecureEraseActor(
         const TActorId& owner,
         TRequestInfoPtr request,
         TDuration requestTimeout,
-        TVector<NProto::TDeviceConfig> devicesToClean);
+        TVector<NProto::TDeviceConfig> devicesToClean,
+        std::shared_ptr<TSecureEraseActorsGroup> SecureEraseActorsGroup);
 
     void Bootstrap(const TActorContext& ctx);
 
@@ -70,14 +78,19 @@ private:
 ////////////////////////////////////////////////////////////////////////////////
 
 TSecureEraseActor::TSecureEraseActor(
-        const TActorId& owner,
-        TRequestInfoPtr request,
-        TDuration requestTimeout,
-        TVector<NProto::TDeviceConfig> devicesToClean)
+    const TActorId& owner,
+    TRequestInfoPtr request,
+    TDuration requestTimeout,
+    TVector<NProto::TDeviceConfig> devicesToClean,
+    std::shared_ptr<TSecureEraseActorsGroup> secureEraseActorsGroup)
     : Owner(owner)
     , Request(std::move(request))
     , RequestTimeout(requestTimeout)
     , Devices(std::move(devicesToClean))
+    , SecureEraseActorsGroup(
+          secureEraseActorsGroup
+              ? std::move(secureEraseActorsGroup)
+              : std::make_shared<TSecureEraseActorsGroup>(1, 0))
 {}
 
 void TSecureEraseActor::Bootstrap(const TActorContext& ctx)
@@ -86,7 +99,6 @@ void TSecureEraseActor::Bootstrap(const TActorContext& ctx)
 
     for (ui64 i = 0; i != Devices.size(); ++i) {
         auto& device = Devices[i];
-
         auto request = std::make_unique<TEvDiskAgent::TEvSecureEraseDeviceRequest>();
         request->Record.SetDeviceUUID(device.GetDeviceUUID());
 
@@ -109,11 +121,21 @@ void TSecureEraseActor::Bootstrap(const TActorContext& ctx)
     }
 }
 
-void TSecureEraseActor::ReplyAndDie(const TActorContext& ctx, NProto::TError error)
+void TSecureEraseActor::ReplyAndDie(
+    const TActorContext& ctx,
+    NProto::TError error)
 {
-    auto response = std::make_unique<TEvDiskRegistryPrivate::TEvSecureEraseResponse>(
-        std::move(error),
-        CleanDevices.size());
+    SecureEraseActorsGroup->CleanDevices += CleanDevices.size();
+    if (--SecureEraseActorsGroup->ActorsInProgress != 0) {
+        Die(ctx);
+        return;
+    }
+
+    auto response =
+        std::make_unique<TEvDiskRegistryPrivate::TEvSecureEraseResponse>(
+            std::move(error),
+            SecureEraseActorsGroup->CleanDevices);
+
     NCloud::Reply(ctx, *Request, std::move(response));
 
     NCloud::Send(
@@ -375,7 +397,6 @@ void TDiskRegistryActor::SecureErase(const TActorContext& ctx)
         dirtyDevices.size());
 
     SecureEraseInProgress = true;
-
     auto request = std::make_unique<TEvDiskRegistryPrivate::TEvSecureEraseRequest>(
         std::move(dirtyDevices),
         Config->GetNonReplicatedSecureEraseTimeout());
@@ -421,13 +442,19 @@ void TDiskRegistryActor::HandleSecureErase(
         poolMap[device.GetPoolName()].push_back(std::move(device));
     }
 
+    auto secureEraseActorsGroup =
+        std::make_shared<TSecureEraseActor::TSecureEraseActorsGroup>(
+            poolMap.size(),
+            0);
     for (auto& [poolName, devices]: poolMap) {
         auto actor = NCloud::Register<TSecureEraseActor>(
             ctx,
             ctx.SelfID,
             CreateRequestInfo(ev->Sender, ev->Cookie, msg->CallContext),
             msg->RequestTimeout,
-            std::move(devices));
+            std::move(devices),
+            secureEraseActorsGroup);
+
         Actors.insert(actor);
     }
 }
