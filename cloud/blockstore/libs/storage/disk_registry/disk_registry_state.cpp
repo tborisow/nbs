@@ -31,10 +31,6 @@ namespace {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-constexpr TDuration CMS_UPDATE_STATE_TO_ONLINE_TIMEOUT = TDuration::Minutes(5);
-
-////////////////////////////////////////////////////////////////////////////////
-
 template<typename T>
 struct TTableCount;
 
@@ -95,19 +91,6 @@ TString GetMirroredDiskGroupId(const TString& diskId)
 TString GetReplicaDiskId(const TString& diskId, ui32 i)
 {
     return TStringBuilder() << diskId << "/" << i;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-TDuration GetInfraTimeout(
-    const TStorageConfig& config,
-    NProto::EAgentState agentState)
-{
-    if (agentState == NProto::AGENT_STATE_UNAVAILABLE) {
-        return config.GetNonReplicatedInfraUnavailableAgentTimeout();
-    }
-
-    return config.GetNonReplicatedInfraTimeout();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -317,6 +300,46 @@ TString TDiskInfo::GetPoolName() const
 
 ////////////////////////////////////////////////////////////////////////////////
 
+class TDiskRegistryState::IDiskRegistryWrapper final
+    : public NDiskRegistry::IDiskRegistry
+{
+private:
+    TDiskRegistryState& Impl;
+
+public:
+    explicit IDiskRegistryWrapper(TDiskRegistryState& impl)
+        : Impl{impl}
+    {}
+
+    [[nodiscard]] bool HasDependentSsdDisks(
+        const NProto::TAgentConfig& agent) const override
+    {
+        return Impl.HasDependentSsdDisks(agent);
+    }
+
+    [[nodiscard]] bool HasDependentSsdDisks(
+        const NProto::TDeviceConfig& device) const override
+    {
+        return Impl.HasDependentSsdDisks(device);
+    }
+
+    [[nodiscard]] ui32 CountBrokenHddPlacementGroupPartitionsAfterAgentRemoval(
+        const NProto::TAgentConfig& agent) const override
+    {
+        return Impl.CountBrokenHddPlacementGroupPartitionsAfterAgentRemoval(
+            agent);
+    }
+
+    [[nodiscard]] ui32 CountBrokenHddPlacementGroupPartitionsAfterDeviceRemoval(
+        const NProto::TDeviceConfig& device) const override
+    {
+        return Impl.CountBrokenHddPlacementGroupPartitionsAfterDeviceRemoval(
+            {device.GetDeviceUUID()});
+    }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
 TDiskRegistryState::TDiskRegistryState(
         ILoggingServicePtr logging,
         TStorageConfigPtr storageConfig,
@@ -339,7 +362,7 @@ TDiskRegistryState::TDiskRegistryState(
         THashMap<TString, NProto::TDiskRegistryAgentParams> diskRegistryAgentListParams)
     : Log(logging->CreateLog("BLOCKSTORE_DISK_REGISTRY"))
     , StorageConfig(std::move(storageConfig))
-    , Counters(counters)
+    , Counters(std::move(counters))
     , AgentList({
         static_cast<double>(
             StorageConfig->GetNonReplicatedAgentTimeoutGrowthFactor()),
@@ -347,7 +370,7 @@ TDiskRegistryState::TDiskRegistryState(
         StorageConfig->GetNonReplicatedAgentMaxTimeout(),
         StorageConfig->GetNonReplicatedAgentDisconnectRecoveryInterval(),
         StorageConfig->GetSerialNumberValidationEnabled(),
-    }, counters, std::move(agents), std::move(diskRegistryAgentListParams), Log)
+    }, Counters, std::move(agents), std::move(diskRegistryAgentListParams), Log)
     , DeviceList(
         CollectDirtyDeviceUUIDs(dirtyDevices),
         std::move(suspendedDevices),
@@ -364,6 +387,7 @@ TDiskRegistryState::TDiskRegistryState(
         diskStateSeqNo,
         std::move(outdatedVolumeConfigs)
     }
+    , CmsPtr(NDiskRegistry::CreateCMS(StorageConfig))
 {
     for (const auto& x: AutomaticallyReplacedDevices) {
         AutomaticallyReplacedDeviceIds.insert(x.DeviceId);
@@ -4686,7 +4710,7 @@ NProto::TError TDiskRegistryState::UpdateAgentState(
     }
 
     auto error = CheckAgentStateTransition(*agent, newState, timestamp);
-    if (FAILED(error.GetCode())) {
+    if (HasError(error)) {
         return error;
     }
 
@@ -4701,10 +4725,8 @@ NProto::TError TDiskRegistryState::UpdateAgentState(
         return {};
     }
 
-    const auto cmsTs = TInstant::MicroSeconds(agent->GetCmsTs());
     const auto oldState = agent->GetState();
-    const auto cmsDeadline = cmsTs + GetInfraTimeout(*StorageConfig, oldState);
-    const auto cmsRequestActive = cmsTs && cmsDeadline > timestamp;
+    const auto cmsRequestActive = CmsPtr->IsCmsRequestActive(*agent, timestamp);
 
     if (!cmsRequestActive) {
         agent->SetCmsTs(0);
@@ -4834,9 +4856,9 @@ void TDiskRegistryState::ApplyAgentStateChange(
         }
     }
 
-    for (auto& id: diskIds) {
+    for (const auto& id: diskIds) {
         if (TryUpdateDiskState(db, id, timestamp)) {
-            affectedDisks.push_back(std::move(id));
+            affectedDisks.push_back(id);
         }
     }
 }
@@ -4844,39 +4866,43 @@ void TDiskRegistryState::ApplyAgentStateChange(
 bool TDiskRegistryState::HasDependentSsdDisks(
     const NProto::TAgentConfig& agent) const
 {
-    for (const auto& d: agent.GetDevices()) {
-        if (d.GetState() >= NProto::DEVICE_STATE_ERROR) {
-            continue;
-        }
+    return AnyOf(agent.GetDevices(), [this] (const auto& device) {
+        return HasDependentSsdDisks(device);
+    });
+}
 
-        if (d.GetPoolKind() == NProto::DEVICE_POOL_KIND_LOCAL &&
-            PendingCleanup.FindDiskId(d.GetDeviceUUID()))
-        {
-            return true;
-        }
+bool TDiskRegistryState::HasDependentSsdDisks(
+    const NProto::TDeviceConfig& device) const
+{
+    if (device.GetState() >= NProto::DEVICE_STATE_ERROR) {
+        return false;
+    }
 
-        const auto diskId = FindDisk(d.GetDeviceUUID());
-
-        if (!diskId) {
-            continue;
-        }
-
-        const auto* disk = Disks.FindPtr(diskId);
-        if (!disk) {
-            ReportDiskRegistryDiskNotFound(
-                TStringBuilder() << "HasDependentSsdDisks:DiskId: " << diskId);
-            continue;
-        }
-
-        if (disk->MediaKind == NProto::STORAGE_MEDIA_HDD_NONREPLICATED) {
-            // existence of hdd disks should not directly block maintenance
-            continue;
-        }
-
+    if (device.GetPoolKind() == NProto::DEVICE_POOL_KIND_LOCAL &&
+        PendingCleanup.FindDiskId(device.GetDeviceUUID()))
+    {
         return true;
     }
 
-    return false;
+    const auto diskId = FindDisk(device.GetDeviceUUID());
+
+    if (!diskId) {
+        return false;
+    }
+
+    const auto* disk = Disks.FindPtr(diskId);
+    if (!disk) {
+        ReportDiskRegistryDiskNotFound(
+            TStringBuilder() << "HasDependentSsdDisks:DiskId: " << diskId);
+        return false;
+    }
+
+    if (disk->MediaKind == NProto::STORAGE_MEDIA_HDD_NONREPLICATED) {
+        // existence of hdd disks should not directly block maintenance
+        return false;
+    }
+
+    return true;
 }
 
 ui32 TDiskRegistryState::CountBrokenHddPlacementGroupPartitionsAfterAgentRemoval(
@@ -4985,78 +5011,31 @@ NProto::TError TDiskRegistryState::UpdateCmsHostState(
         return error;
     }
 
-    TInstant cmsTs = TInstant::MicroSeconds(agent->GetCmsTs());
-    if (cmsTs == TInstant::Zero()) {
-        cmsTs = now;
-    }
+    IDiskRegistryWrapper self{*this};
 
-    const auto infraTimeout = GetInfraTimeout(*StorageConfig, agent->GetState());
+    auto result = newState == NProto::AGENT_STATE_ONLINE
+        ? CmsPtr->AddHost(self, *agent, now)
+        : CmsPtr->RemoveHost(self, *agent, now);
 
-    if (cmsTs + infraTimeout <= now
-            && agent->GetState() < NProto::AGENT_STATE_UNAVAILABLE)
-    {
-        // restart timer
-        cmsTs = now;
-    }
-
-    timeout = cmsTs + infraTimeout - now;
-
-    const bool hasDependentDisks = HasDependentSsdDisks(*agent);
-    const ui32 brokenPlacementGroupPartitions =
-        CountBrokenHddPlacementGroupPartitionsAfterAgentRemoval(*agent);
-    const ui32 maxBrokenHddPartitions =
-        StorageConfig->GetMaxBrokenHddPlacementGroupPartitionsAfterDeviceRemoval();
-    if (!hasDependentDisks
-            && brokenPlacementGroupPartitions <= maxBrokenHddPartitions)
-    {
-        // no dependent disks => we can return this host immediately
-        timeout = TDuration::Zero();
-    }
-
-    if (newState == NProto::AGENT_STATE_ONLINE
-        && agent->GetState() < NProto::AGENT_STATE_UNAVAILABLE)
-    {
-        timeout = TDuration::Zero();
-    }
-
-    NProto::TError result;
-
-    // Agent can return from 'unavailable' state only when it is reconnected to
-    // the cluster.
-    if (agent->GetState() == NProto::AGENT_STATE_UNAVAILABLE &&
-        newState == NProto::AGENT_STATE_ONLINE)
-    {
-        timeout = cmsTs + CMS_UPDATE_STATE_TO_ONLINE_TIMEOUT - now;
-        if (!timeout) {
-            result.SetCode(E_INVALID_STATE);
-        }
-    }
-
-    if (timeout) {
-        result = MakeError(
-            E_TRY_AGAIN,
-            TStringBuilder() << "time remaining: " << timeout);
-    } else {
-        cmsTs = TInstant::Zero();
-    }
+    timeout = result.Timeout;
 
     if (dryRun) {
-        return result;
+        return result.Error;
     }
 
     if (agent->GetState() != NProto::AGENT_STATE_UNAVAILABLE) {
         ChangeAgentState(*agent, newState, now, "cms action");
     }
 
-    agent->SetCmsTs(cmsTs.MicroSeconds());
+    agent->SetCmsTs(result.CmsTs.MicroSeconds());
 
     ApplyAgentStateChange(db, *agent, now, affectedDisks);
 
-    if (newState != NProto::AGENT_STATE_ONLINE && !HasError(result)) {
+    if (newState != NProto::AGENT_STATE_ONLINE && !HasError(result.Error)) {
         if (StorageConfig->GetCleanupDRConfigOnCMSActions()) {
             auto error = TryToRemoveAgentDevices(db, agent->GetAgentId());
             if (!HasError(error)) {
-                return result;
+                return result.Error;
             }
 
             // Do not return the error from "TryToRemoveAgentDevices()" since
@@ -5070,17 +5049,17 @@ NProto::TError TDiskRegistryState::UpdateCmsHostState(
         SuspendLocalDevices(db, *agent);
     }
 
-    if (newState == NProto::AGENT_STATE_ONLINE && !HasError(result)) {
-        result = RegisterUnknownDevices(db, *agent, now);
+    if (newState == NProto::AGENT_STATE_ONLINE && !HasError(result.Error)) {
+        result.Error = RegisterUnknownDevices(db, *agent, now);
 
-        if (!HasError(result) &&
+        if (!HasError(result.Error) &&
             StorageConfig->GetNonReplicatedDontSuspendDevices())
         {
             ResumeLocalDevices(db, *agent, now);
         }
     }
 
-    return result;
+    return result.Error;
 }
 
 NProto::TError TDiskRegistryState::RegisterUnknownDevices(
@@ -5493,26 +5472,25 @@ NProto::TError TDiskRegistryState::CmsAddDevice(
     bool dryRun,
     TDuration& timeout)
 {
-    NProto::TError error = CheckDeviceStateTransition(
-        device,
-        NProto::DEVICE_STATE_ONLINE,
-        now);
-
-    if (HasError(error)) {
+    if (auto error = CheckDeviceStateTransition(
+            device,
+            NProto::DEVICE_STATE_ONLINE,
+            now);
+        HasError(error))
+    {
         return error;
     }
 
-    error = {};
-    timeout = {};
+    IDiskRegistryWrapper self{*this};
 
-    if (device.GetState() == NProto::DEVICE_STATE_ERROR) {
-        // CMS can't return device from 'error' state.
-        error = MakeError(E_INVALID_STATE, "device is in error state");
-    }
+    const auto result = CmsPtr->AddDevice(self, agent, device, now);
+    timeout = result.Timeout;
 
     if (dryRun) {
-        return error;
+        return result.Error;
     }
+
+    device.SetCmsTs(result.CmsTs.MicroSeconds());
 
     if (device.GetState() != NProto::DEVICE_STATE_ERROR) {
         device.SetState(NProto::DEVICE_STATE_ONLINE);
@@ -5525,11 +5503,11 @@ NProto::TError TDiskRegistryState::CmsAddDevice(
     ApplyDeviceStateChange(db, agent, device, now, affectedDisk);
     Y_UNUSED(affectedDisk);
 
-    if (shouldResume && !HasError(error)) {
+    if (shouldResume && !HasError(result.Error)) {
         ResumeDevice(now, db, device.GetDeviceUUID());
     }
 
-    return error;
+    return result.Error;
 }
 
 NProto::TError TDiskRegistryState::CmsRemoveDevice(
@@ -5549,6 +5527,9 @@ NProto::TError TDiskRegistryState::CmsRemoveDevice(
     if (HasError(error)) {
         return error;
     }
+
+    IDiskRegistryWrapper self{*this};
+    const auto result = CmsPtr->RemoveDevice(self, agent, device, now);
 
     TInstant cmsTs;
     error = {};

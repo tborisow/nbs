@@ -2,11 +2,11 @@
 
 #include "public.h"
 
-#include "disk_registry_state_notification.h"
-
+#include "disk_registry_cms.h"
 #include "disk_registry_database.h"
 #include "disk_registry_private.h"
 #include "disk_registry_self_counters.h"
+#include "disk_registry_state_notification.h"
 
 #include <cloud/blockstore/libs/storage/core/public.h>
 #include <cloud/blockstore/libs/storage/disk_registry/model/agent_list.h>
@@ -279,6 +279,8 @@ class TDiskRegistryState
     using TCheckpoints = THashMap<TCheckpointId, TCheckpointInfo>;
     using TPlacementGroups = THashMap<TString, TPlacementGroupInfo>;
 
+    class IDiskRegistryWrapper;
+
 private:
     TLog Log;
 
@@ -329,6 +331,8 @@ private:
     NDiskRegistry::TNotificationSystem NotificationSystem;
 
     THashMap<TString, TCachedAcquireRequests> AcquireCacheByAgentId;
+
+    std::shared_ptr<NDiskRegistry::ICms> CmsPtr;
 
 public:
     TDiskRegistryState(
@@ -977,6 +981,8 @@ private:
         TVector<TDiskId>& affectedDisks);
 
     bool HasDependentSsdDisks(const NProto::TAgentConfig& agent) const;
+    bool HasDependentSsdDisks(const NProto::TDeviceConfig& device) const;
+
     ui32 CountBrokenHddPlacementGroupPartitionsAfterAgentRemoval(
         const NProto::TAgentConfig& agent) const;
     ui32 CountBrokenHddPlacementGroupPartitionsAfterDeviceRemoval(

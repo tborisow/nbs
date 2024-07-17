@@ -52,6 +52,7 @@ SRCS(
     disk_registry_actor_volume_config.cpp
     disk_registry_actor_waitready.cpp
     disk_registry_actor.cpp
+    disk_registry_cms.cpp
     disk_registry_counters.cpp
     disk_registry_database.cpp
     disk_registry_schema.cpp
