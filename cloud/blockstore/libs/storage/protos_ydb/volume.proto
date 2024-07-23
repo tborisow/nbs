@@ -67,6 +67,8 @@ message TVolumeMeta
     // We don't allow clients with old sequential number to mount disk for read/write
     // in order to prevent data corruption during disk filling.
     uint64 FillSeqNumber = 16;
+
+    TUnavailableDevicesInfo UnavailableDevicesInfo = 17;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

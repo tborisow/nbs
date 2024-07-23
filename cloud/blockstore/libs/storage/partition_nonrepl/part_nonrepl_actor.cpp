@@ -31,9 +31,7 @@ TNonreplicatedPartitionActor::TNonreplicatedPartitionActor(
         CreatePartitionDiskCounters(EPublishingPolicy::DiskRegistryBased))
 {}
 
-TNonreplicatedPartitionActor::~TNonreplicatedPartitionActor()
-{
-}
+TNonreplicatedPartitionActor::~TNonreplicatedPartitionActor() = default;
 
 TDuration TNonreplicatedPartitionActor::GetMinRequestTimeout() const
 {
@@ -335,12 +333,27 @@ void TNonreplicatedPartitionActor::HandleWakeup(
             );
             deviceStat.LastTimeoutTs = now;
 
+            Y_DEBUG_ABORT_UNLESS(PartConfig->GetDevices().size() <= i);
             LOG_INFO_S(ctx, TBlockStoreComponents::PARTITION,
                 "Updated deviceStat: DeviceIndex=" << i
+                << ", DeviceUUID=" << PartConfig->GetDevices()[i].GetDeviceUUID()
                 << ", ExpectedClientBackoff=" << deviceStat.ExpectedClientBackoff
                 << ", TimedOutStateDuration=" << deviceStat.TimedOutStateDuration
                 << ", CurrentTimeout=" << deviceStat.CurrentTimeout
                 << ", LastTimeoutTs=" << deviceStat.LastTimeoutTs);
+
+            if (deviceStat.TimedOutStateDuration > TDuration::Seconds(3)) {
+                auto request = std::make_unique<TEvVolume::TEvDeviceTimeoutedRequest>();
+                request->Record.SetDeviceUUID(PartConfig->GetDevices()[i].GetDeviceUUID());
+                request->Record.SetDeviceIndex(i);
+                ctx.Send(PartConfig->GetParentActorId(), request.release());
+
+                // NCloud::Send<TEvVolume::TEvDeviceTimeoutedRequest>(
+                //     ctx,
+                //     PartConfig->GetParentActorId(),
+                //     i,
+                //     PartConfig->GetDevices()[i].GetDeviceUUID());
+            }
         }
     }
 

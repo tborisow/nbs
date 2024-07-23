@@ -742,3 +742,23 @@ message TDescribeVolumeModelResponse
     // Volume model information.
     TVolumeModel VolumeModel = 2;
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// ??
+
+message TDeviceTimeoutedRequest
+{
+    // Optional request headers.
+    THeaders Headers = 1;
+
+                                        // What if we are migrating?
+    uint32 DeviceIndex = 2;
+    // Device id.
+    string DeviceUUID = 3;
+}
+
+message TDeviceTimeoutedResponse
+{
+    // Optional error, set only if error happened.
+    NCloud.NProto.TError Error = 1;
+}

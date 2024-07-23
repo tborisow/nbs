@@ -304,6 +304,10 @@ public:
         Meta.SetFillSeqNumber(fillSeqNumber);
     }
 
+    void UpdateIncompleteMirrorIOMode(NProto::TUnavailableDevicesInfo info) {
+        *Meta.MutableUnavailableDevicesInfo() = std::move(info);
+    }
+
     void SetStartPartitionsNeeded(bool startPartitionsNeeded)
     {
         StartPartitionsNeeded = startPartitionsNeeded;

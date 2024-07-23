@@ -175,6 +175,15 @@ message TDeviceConfig
 
 ////////////////////////////////////////////////////////////////////////////////
 
+message TUnavailableDevicesInfo
+{
+    repeated string DeviceUUIDs = 1;
+    // 0 for main devices, 1 and 2 for miror replicas.
+    uint32 ReplicaIndex = 2;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 message TSuspendedDevice
 {
     string Id = 1;

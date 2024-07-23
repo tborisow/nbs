@@ -40,6 +40,7 @@ namespace NCloud::NBlockStore::NStorage {
     xxx(UpdateVolumeParams,             __VA_ARGS__)                           \
     xxx(DeleteVolumeParams,             __VA_ARGS__)                           \
     xxx(ChangeStorageConfig,            __VA_ARGS__)                           \
+    xxx(UpdateIncompleteMirrorIOMode,   __VA_ARGS__)                           \
 // BLOCKSTORE_VOLUME_TRANSACTIONS
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -670,6 +671,24 @@ struct TTxVolume
         {
             StorageConfigFromDB.Clear();
             ResultStorageConfig.Clear();
+        }
+    };
+
+    struct TUpdateIncompleteMirrorIOMode
+    {
+        const TRequestInfoPtr RequestInfo;
+        NProto::TUnavailableDevicesInfo Info;
+
+        TUpdateIncompleteMirrorIOMode(
+            TRequestInfoPtr requestInfo,
+            NProto::TUnavailableDevicesInfo info)
+            : RequestInfo(std::move(requestInfo))
+            , Info(std::move(info))
+        {}
+
+        void Clear()
+        {
+
         }
     };
 };

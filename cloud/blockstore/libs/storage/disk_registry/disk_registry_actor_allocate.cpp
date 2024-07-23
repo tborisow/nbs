@@ -2,6 +2,8 @@
 
 #include <cloud/blockstore/libs/diagnostics/critical_events.h>
 
+#include <google/protobuf/util/json_util.h>
+
 namespace NCloud::NBlockStore::NStorage {
 
 namespace {
@@ -240,6 +242,17 @@ void TDiskRegistryActor::CompleteAddDisk(
         response->Record.SetMuteIOErrors(args.MuteIOErrors);
     }
 
+    TString out;
+    google::protobuf::util::JsonPrintOptions opts;
+    opts.add_whitespace = true;
+    opts.always_print_primitive_fields = true;
+    opts.preserve_proto_field_names = true;
+    Y_ABORT_UNLESS(google::protobuf::util::MessageToJsonString(
+                       response->Record,
+                       &out,
+                       opts)
+                       .ok());
+    Cerr << out << Endl;
     NCloud::Reply(ctx, *args.RequestInfo, std::move(response));
 
     DestroyBrokenDisks(ctx);

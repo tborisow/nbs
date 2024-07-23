@@ -686,6 +686,21 @@ void TPartitionActor::HandleDrain(
     DrainActorCompanion.HandleDrain(ev, ctx);
 }
 
+void TPartitionActor::HandleEnterIncompleteMirrorRWMode(
+    const TEvPartition::TEvEnterIncompleteMirrorRWModeRequest::TPtr& ev,
+    const TActorContext& ctx)
+{
+    Y_UNUSED(ev);
+    Y_UNUSED(ctx);
+    // EnterIncompleteMirrorRWModeRequest is nonrepl-only message.
+    Y_DEBUG_ABORT_UNLESS(false);
+    NCloud::Reply(
+        ctx,
+        *ev,
+        std::make_unique<TEvPartition::TEvEnterIncompleteMirrorRWModeResponse>(
+            MakeError(E_NOT_IMPLEMENTED)));
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 #define BLOCKSTORE_HANDLE_UNIMPLEMENTED_REQUEST(name, ns)                      \
