@@ -10,6 +10,7 @@ SRCS(
     mirror_request_actor.cpp
     replica_info.cpp
     resync_range.cpp
+    smart_resync_actor.cpp
 
     part_mirror.cpp
     part_mirror_actor.cpp

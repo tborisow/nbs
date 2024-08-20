@@ -22,29 +22,23 @@ using TEvPartition = NPartition::TEvPartition;
 
 LWTRACE_USING(BLOCKSTORE_STORAGE_PROVIDER);
 
-TIncompleteMirrorRWModeControllerActor::TIncompleteMirrorRWModeControllerActor(
+TSmartResyncActor::TSmartResyncActor(
         TStorageConfigPtr config,
         TNonreplicatedPartitionConfigPtr partConfig,
-        IProfileLogPtr profileLog,
-        IBlockDigestGeneratorPtr blockDigestGenerator,
-        TString rwClientId,
-        TActorId partNonreplActorId,
-        TActorId statActorId,
-        TActorId mirrorPartitionActor)
+        NActors::TActorId partNonreplActorId,
+        TActorId statActorId)
     : Config(std::move(config))
     , PartConfig(std::move(partConfig))
-    , ProfileLog(std::move(profileLog))
-    , BlockDigestGenerator(std::move(blockDigestGenerator))
-    , RwClientId(std::move(rwClientId))
     , PartNonreplActorId(partNonreplActorId)
     , StatActorId(statActorId)
-    , MirrorPartitionActor(mirrorPartitionActor)
-{}
+{
+    partConfig->Get
+}
 
-TIncompleteMirrorRWModeControllerActor::~TIncompleteMirrorRWModeControllerActor() = default;
+TSmartResyncActor::~TSmartResyncActor() = default;
 
 template <typename TMethod>
-void TIncompleteMirrorRWModeControllerActor::WriteRequest(
+void TSmartResyncActor::WriteRequest(
     const typename TMethod::TRequest::TPtr& ev,
     const TActorContext& ctx)
 {
@@ -78,13 +72,13 @@ void TIncompleteMirrorRWModeControllerActor::WriteRequest(
     ctx.Send(event.release());
 }
 
-void TIncompleteMirrorRWModeControllerActor::Bootstrap(const TActorContext& ctx)
+void TSmartResyncActor::OnBootstrap(const TActorContext& ctx)
 {
     Y_UNUSED(ctx);
     Become(&TThis::StateWork);
 }
 
-void TIncompleteMirrorRWModeControllerActor::HandleAgentIsUnavailable(
+void TSmartResyncActor::HandleAgentIsUnavailable(
     const NPartition::TEvPartition::TEvAgentIsUnavailable::TPtr& ev,
     const NActors::TActorContext& ctx)
 {
@@ -114,7 +108,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsUnavailable(
     }
 }
 
-void TIncompleteMirrorRWModeControllerActor::HandleAgentIsBackOnline(
+void TSmartResyncActor::HandleAgentIsBackOnline(
         const NPartition::TEvPartition::TEvAgentIsBackOnline::TPtr& ev,
         const NActors::TActorContext& ctx) {
     const auto* msg = ev->Get();
@@ -147,28 +141,28 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsBackOnline(
 
 }
 
-bool TIncompleteMirrorRWModeControllerActor::AgentIsUnavailable(
+bool TSmartResyncActor::AgentIsUnavailable(
     const TString& agentId) const
 {
     const TAgentState* state = AgentState.FindPtr(agentId);
     return state && state->State == EAgentState::Unavailable;
 }
 
-// void TIncompleteMirrorRWModeControllerActor::HandleReadBlocks(
+// void TSmartResyncActor::HandleReadBlocks(
 //     const TEvService::TEvReadBlocksRequest::TPtr& ev,
 //     const TActorContext& ctx)
 // {
 //     ReadBlocks<TEvService::TReadBlocksMethod>(ev, ctx);
 // }
 
-// void TIncompleteMirrorRWModeControllerActor::HandleReadBlocksLocal(
+// void TSmartResyncActor::HandleReadBlocksLocal(
 //     const TEvService::TEvReadBlocksLocalRequest::TPtr& ev,
 //     const TActorContext& ctx)
 // {
 //     ReadBlocks<TEvService::TReadBlocksLocalMethod>(ev, ctx);
 // }
 
-void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
+void TSmartResyncActor::HandleWriteBlocks(
     const TEvService::TEvWriteBlocksRequest::TPtr& ev,
     const TActorContext& ctx)
 {
@@ -236,7 +230,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
         &ev->Sender));
 }
 
-void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocksLocal(
+void TSmartResyncActor::HandleWriteBlocksLocal(
     const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
     const TActorContext& ctx)
 {
@@ -294,7 +288,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocksLocal(
         &ev->Sender));
 }
 
-void TIncompleteMirrorRWModeControllerActor::HandleZeroBlocks(
+void TSmartResyncActor::HandleZeroBlocks(
     const TEvService::TEvZeroBlocksRequest::TPtr& ev,
     const TActorContext& ctx)
 {
@@ -310,7 +304,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleZeroBlocks(
         &ev->Sender));
 }
 
-void TIncompleteMirrorRWModeControllerActor::HandlePoisonPill(
+void TSmartResyncActor::HandlePoisonPill(
     const NActors::TEvents::TEvPoisonPill::TPtr& ev,
     const NActors::TActorContext& ctx)
 {
@@ -331,7 +325,7 @@ void TIncompleteMirrorRWModeControllerActor::HandlePoisonPill(
 ////////////////////////////////////////////////////////////////////////////////
 
 
-STFUNC(TIncompleteMirrorRWModeControllerActor::StateWork)
+STFUNC(TSmartResyncActor::StateWork)
 {
     switch (ev->GetTypeRewrite()) {
         // HFunc(TEvService::TEvReadBlocksRequest, HandleReadBlocks);
@@ -377,7 +371,7 @@ STFUNC(TIncompleteMirrorRWModeControllerActor::StateWork)
     }
 }
 
-STFUNC(TIncompleteMirrorRWModeControllerActor::StateZombie)
+STFUNC(TSmartResyncActor::StateZombie)
 {
     switch (ev->GetTypeRewrite()) {
         IgnoreFunc(TEvNonreplPartitionPrivate::TEvUpdateCounters);

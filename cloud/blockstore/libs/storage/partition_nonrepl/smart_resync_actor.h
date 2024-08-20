@@ -18,6 +18,7 @@
 #include <cloud/blockstore/libs/storage/model/requests_in_progress.h>
 #include <cloud/blockstore/libs/storage/partition_common/drain_actor_companion.h>
 #include <cloud/blockstore/libs/storage/partition_common/get_changed_blocks_companion.h>
+#include <cloud/blockstore/libs/storage/partition_nonrepl/part_nonrepl_migration_common_actor.h>
 #include <cloud/storage/core/libs/common/compressed_bitmap.h>
 
 #include <contrib/ydb/library/actors/core/actor_bootstrapped.h>
@@ -27,8 +28,9 @@
 
 namespace NCloud::NBlockStore::NStorage {
 
-class TIncompleteMirrorRWModeControllerActor final
-    : public NActors::TActorBootstrapped<TIncompleteMirrorRWModeControllerActor>
+class TSmartResyncActor final
+    : public TNonreplicatedPartitionMigrationCommonActor,
+        public IMigrationOwner
 {
 private:
     const TStorageConfigPtr Config;
@@ -40,25 +42,23 @@ private:
     const NActors::TActorId StatActorId;
     const NActors::TActorId MirrorPartitionActor;
 
-    enum class EAgentState
-    {
-        Unavailable,
-        Resyncing
-    };
-    struct TAgentState
-    {
-        EAgentState State;
-        NActors::TActorId AgentAvailabilityWaiter;
-        NActors::TActorId SmartResyncActor;
-        std::unique_ptr<TCompressedBitmap> CleanBlockMap;
-    };
-    THashMap<TString, TAgentState> AgentState;
-
-    // ?
-    TDynBitMap DirtyBlockMap;
+    std::shared_ptr<TCompressedBitmap> BlockMap;
 
 public:
-    TIncompleteMirrorRWModeControllerActor(
+    // TNonreplicatedPartitionMigrationCommonActor(
+    //     IMigrationOwner* migrationOwner,
+    //     TStorageConfigPtr config,
+    //     TString diskId,
+    //     ui64 blockCount,
+    //     ui64 blockSize,
+    //     IProfileLogPtr profileLog,
+    //     IBlockDigestGeneratorPtr digestGenerator,
+    //     TCompressedBitmap migrationBlockMap,
+    //     TString rwClientId,
+    //     NActors::TActorId statActorId,
+    //     ui32 maxIoDepth);
+
+    TSmartResyncActor(
         TStorageConfigPtr config,
         TNonreplicatedPartitionConfigPtr partConfig,
         IProfileLogPtr profileLog,
@@ -68,12 +68,21 @@ public:
         NActors::TActorId statActorId,
         NActors::TActorId mirrorPartitionActor);
 
-    ~TIncompleteMirrorRWModeControllerActor() override;
-
-    void Bootstrap(const NActors::TActorContext& ctx);
+    ~TSmartResyncActor() override;
 
 private:
     [[nodiscard]] bool AgentIsUnavailable(const TString& agentId) const;
+
+    void OnBootstrap(const NActors::TActorContext& ctx) override;
+    bool OnMessage(
+        const NActors::TActorContext& ctx,
+        TAutoPtr<NActors::IEventHandle>& ev) override;
+    [[nodiscard]]  TDuration CalculateMigrationTimeout(TBlockRange64 range) override;
+     void OnMigrationProgress(
+        const NActors::TActorContext& ctx,
+        ui64 migrationIndex) override;
+     void OnMigrationFinished(const NActors::TActorContext& ctx) override;
+     void OnMigrationError(const NActors::TActorContext& ctx) override;
 
 private:
     STFUNC(StateWork);

@@ -517,7 +517,8 @@ void TMirrorPartitionActor::HandleEnterIncompleteMirrorRWMode(
                 Config,
                 State.GetReplicaInfos()[msg->ReplicaIndex].Config,
                 State.GetRealReplicaActors()[msg->ReplicaIndex],
-                StatActorId));
+                StatActorId,
+                SelfId()));
         auto error = State.SetReplicaProxy(msg->ReplicaIndex, proxyActorId);
         if (HasError(error)) {
             NCloud::Reply(
