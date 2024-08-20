@@ -35,7 +35,6 @@ namespace NCloud::NBlockStore::NStorage {
     xxx(UpdateVolumeParams,       __VA_ARGS__)                                 \
     xxx(ChangeStorageConfig,      __VA_ARGS__)                                 \
     xxx(GetStorageConfig,         __VA_ARGS__)                                 \
-    xxx(DeviceTimeouted,          __VA_ARGS__)                                 \
 
 // BLOCKSTORE_VOLUME_REQUESTS
 
@@ -238,6 +237,26 @@ struct TEvVolume
         {}
     };
 
+    struct TDeviceTimeoutedRequest
+    {
+        ui32 DeviceIndex;
+        TString DeviceUUID;
+
+        TDeviceTimeoutedRequest(ui32 deviceIndex, TString deviceUUID)
+            : DeviceIndex(deviceIndex)
+            , DeviceUUID(std::move(deviceUUID))
+        {}
+    };
+
+    struct TDeviceTimeoutedResponse
+    {
+
+        // TDeviceTimeoutedRequest()
+        //     : DeviceIndex(deviceIndex)
+        //     , DeviceUUID(std::move(deviceUUID))
+        // {}
+    };
+
     //
     // Events declaration
     //
@@ -406,6 +425,16 @@ struct TEvVolume
     using TEvPreparePartitionMigrationResponse = TRequestEvent<
         TPreparePartitionMigrationResponse,
         EvPreparePartitionMigrationResponse
+    >;
+
+    using TEvDeviceTimeoutedRequest = TRequestEvent<
+        TDeviceTimeoutedRequest,
+        EvDeviceTimeoutedRequest
+    >;
+
+    using TEvDeviceTimeoutedResponse = TResponseEvent<
+        TDeviceTimeoutedResponse,
+        EvDeviceTimeoutedResponse
     >;
 };
 

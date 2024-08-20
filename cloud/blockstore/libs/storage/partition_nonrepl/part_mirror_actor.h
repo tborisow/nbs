@@ -70,8 +70,6 @@ private:
 
     NProto::TError Status;
 
-    std::optional<ui32> IncompleteIOReplicaIndex;
-
     bool ScrubbingScheduled = false;
     ui64 ScrubbingRangeId = 0;
     TChecksumRangeActorCompanion ChecksumRangeActorCompanion;
@@ -149,9 +147,9 @@ private:
         const NActors::TActorContext& ctx);
 
     void HandleEnterIncompleteMirrorRWMode(
-        const NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest::TPtr&
-            ev,
-        const TActorContext& ctx);
+        const NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest::
+            TPtr& ev,
+        const NActors::TActorContext& ctx);
 
     void HandlePoisonPill(
         const NActors::TEvents::TEvPoisonPill::TPtr& ev,

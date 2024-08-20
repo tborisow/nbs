@@ -3,6 +3,7 @@
 #include "part_nonrepl.h"
 #include "part_nonrepl_migration.h"
 #include "resync_range.h"
+#include "incomplete_mirror_rw_mode_controller_actor.h"
 
 #include <cloud/blockstore/libs/diagnostics/critical_events.h>
 
@@ -479,32 +480,66 @@ void TMirrorPartitionActor::HandleEnterIncompleteMirrorRWMode(
     const TActorContext& ctx)
 {
     const auto* msg = ev->Get();
-    if (IncompleteIOReplicaIndex &&
-              IncompleteIOReplicaIndex != msg->ReplicaIndex)
-    {
-        NCloud::Reply(
+    // if (State.GetIncompleteIOReplicaIndex() &&
+    //           State.GetIncompleteIOReplicaIndex() != msg->ReplicaIndex)
+    // {
+    //     NCloud::Reply(
+    //         ctx,
+    //         *ev,
+    //         std::make_unique<TEvPartition::TEvEnterIncompleteMirrorRWModeResponse>(
+    //             MakeError(
+    //                 E_INVALID_STATE,
+    //                 TStringBuilder()
+    //                     << "Cant enter incomplete IO mode in replica: "
+    //                     << msg->ReplicaIndex
+    //                     << ". Already in incomplete mode with index: "
+    //                     << *State.GetIncompleteIOReplicaIndex())));
+    //         return;
+    // }
+
+
+
+    // Pre initialize bitmap with curret write requests.
+
+    // create controller if not already
+
+    // Send message to it with agent id
+
+    if (!State.IsProxySet(msg->ReplicaIndex)) {
+        Y_DEBUG_ABORT_UNLESS(
+            State.GetReplicaInfos().size() > msg->ReplicaIndex);
+        Y_DEBUG_ABORT_UNLESS(
+            State.GetRealReplicaActors().size() > msg->ReplicaIndex);
+
+        auto proxyActorId = NCloud::Register(
             ctx,
-            *ev,
-            std::make_unique<TEvPartition::TEvEnterIncompleteMirrorRWModeResponse>(
-                MakeError(
-                    E_INVALID_STATE,
-                    TStringBuilder()
-                        << "Cant enter incomplete IO mode in replica: "
-                        << msg->ReplicaIndex
-                        << ". Already in incomplete mode with index: "
-                        << *IncompleteIOReplicaIndex)));
+            std::make_unique<TIncompleteMirrorRWModeControllerActor>(
+                Config,
+                State.GetReplicaInfos()[msg->ReplicaIndex].Config,
+                State.GetRealReplicaActors()[msg->ReplicaIndex],
+                StatActorId));
+        auto error = State.SetReplicaProxy(msg->ReplicaIndex, proxyActorId);
+        if (HasError(error)) {
+            NCloud::Reply(
+                ctx,
+                *ev,
+                std::make_unique<
+                    TEvPartition::TEvEnterIncompleteMirrorRWModeResponse>(
+                    error));
             return;
+        }
     }
 
-    IncompleteIOReplicaIndex = msg->ReplicaIndex;
-
-
+    NCloud::Send<NPartition::TEvPartition::TEvAgentIsUnavailable>(
+        ctx,
+        State.GetReplicaActors()[msg->ReplicaIndex],
+        0,   // cookie
+        msg->AgentId);
 
     NCloud::Reply(
         ctx,
         *ev,
-        std::make_unique<TEvPartition::TEvEnterIncompleteMirrorRWModeResponse>(
-            MakeError(E_NOT_IMPLEMENTED)));
+        std::make_unique<TEvPartition::TEvEnterIncompleteMirrorRWModeResponse>());
 }
 
 ////////////////////////////////////////////////////////////////////////////////

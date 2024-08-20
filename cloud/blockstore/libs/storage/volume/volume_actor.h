@@ -936,6 +936,10 @@ private:
         const TEvService::TEvReadBlocksLocalResponse::TPtr& ev,
         const NActors::TActorContext& ctx);
 
+    void HandleDeviceTimeouted(
+        const TEvVolume::TEvDeviceTimeoutedRequest::TPtr& ev,
+        const NActors::TActorContext& ctx);
+
     void CreateCheckpointLightRequest(
         const NActors::TActorContext& ctx,
         ui64 requestId,

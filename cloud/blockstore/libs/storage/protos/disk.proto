@@ -177,9 +177,17 @@ message TDeviceConfig
 
 message TUnavailableDevicesInfo
 {
-    repeated string DeviceUUIDs = 1;
+    // repeated string DeviceUUIDs = 1;
+
     // 0 for main devices, 1 and 2 for miror replicas.
-    uint32 ReplicaIndex = 2;
+    uint32 ReplicaIndex = 1;
+
+    // Node that agent is running on.
+    uint32 AgentNodeId = 2;
+
+    string AgentId = 3;
+
+    repeated uint32 DevicesIndexes = 4;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -343,10 +343,19 @@ void TNonreplicatedPartitionActor::HandleWakeup(
                 << ", LastTimeoutTs=" << deviceStat.LastTimeoutTs);
 
             if (deviceStat.TimedOutStateDuration > TDuration::Seconds(3)) {
-                auto request = std::make_unique<TEvVolume::TEvDeviceTimeoutedRequest>();
-                request->Record.SetDeviceUUID(PartConfig->GetDevices()[i].GetDeviceUUID());
-                request->Record.SetDeviceIndex(i);
-                ctx.Send(PartConfig->GetParentActorId(), request.release());
+                auto request =
+                    std::make_unique<TEvVolume::TEvDeviceTimeoutedRequest>(
+                        i,
+                        PartConfig->GetDevices()[i].GetDeviceUUID());
+                // request->Record.SetDeviceUUID(
+                //     PartConfig->GetDevices()[i].GetDeviceUUID());
+                // request->Record.SetDeviceIndex(i);
+                // ctx.Send(PartConfig->GetParentActorId(), request.release());
+
+                NCloud::Send(
+                    ctx,
+                    PartConfig->GetParentActorId(),
+                    std::move(request));
 
                 // NCloud::Send<TEvVolume::TEvDeviceTimeoutedRequest>(
                 //     ctx,

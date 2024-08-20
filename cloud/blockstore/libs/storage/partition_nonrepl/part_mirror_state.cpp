@@ -192,14 +192,56 @@ NProto::TError TMirrorPartitionState::NextReadReplica(
     for (ui32 i = 0; i < ReplicaActors.size(); ++i) {
         replicaIndex = ReadReplicaIndex++ % ReplicaActors.size();
         const auto& replicaInfo = ReplicaInfos[replicaIndex];
-        if (replicaInfo.Config->DevicesReadyForReading(readRange)) {
+        if (replicaInfo.Config->DevicesReadyForReading(readRange) &&
+            !IsProxySet(replicaIndex))
+        {
             *actorId = ReplicaActors[replicaIndex];
             return {};
         }
     }
 
-    return MakeError(E_INVALID_STATE, TStringBuilder() << "range "
-        << DescribeRange(readRange) << " targets only fresh/dummy devices");
+    return MakeError(
+        E_INVALID_STATE,
+        TStringBuilder() << "range " << DescribeRange(readRange)
+                         << " targets only fresh/dummy devices");
+}
+
+NProto::TError TMirrorPartitionState::ResetReplicaProxy(ui32 replicaIndex)
+{
+    if (ReplicaActors.size() <= replicaIndex) {
+        return MakeError(
+            E_INVALID_STATE,
+            TStringBuilder() << "Can't reset proxy of index: " << replicaIndex);
+    }
+
+    Y_DEBUG_ABORT_UNLESS(ReplicaActors.size() == ReplicaActorProxies.size());
+    ReplicaActorProxies[replicaIndex] = ReplicaActors[replicaIndex];
+    return {};
+}
+
+NProto::TError TMirrorPartitionState::SetReplicaProxy(
+    ui32 replicaIndex,
+    const NActors::TActorId& actorId)
+{
+    if (ReplicaActors.size() <= replicaIndex) {
+        return MakeError(
+            E_INVALID_STATE,
+            TStringBuilder() << "Can't add proxy to index: " << replicaIndex);
+    }
+
+    Y_DEBUG_ABORT_UNLESS(ReplicaActors.size() == ReplicaActorProxies.size());
+    ReplicaActorProxies[replicaIndex] = actorId;
+    return {};
+}
+
+bool TMirrorPartitionState::IsProxySet(ui32 replicaIndex) const
+{
+    if (ReplicaActors.size() <= replicaIndex) {
+        return false;
+    }
+
+    Y_DEBUG_ABORT_UNLESS(ReplicaActors.size() == ReplicaActorProxies.size());
+    return ReplicaActors[replicaIndex] != ReplicaActorProxies[replicaIndex];
 }
 
 ui32 TMirrorPartitionState::GetBlockSize() const

@@ -867,6 +867,7 @@ void TVolumeActor::HandleDeviceTimeouted(
     // What if migrating?
     // What if mirroring to fresh?
     // What if resyncing?
+    // small resyncs (new feature) ?
 
     // It's safer to do nothing.
     // ??????????????????????
@@ -877,55 +878,81 @@ void TVolumeActor::HandleDeviceTimeouted(
     //     return;
     // }
 
-    auto pred = [uuid = msg->Record.GetDeviceUUID()](const auto& device){
+
+    // The code below implies that devices from different replicas can't address one agent. This should be at least DCHECK'ed.
+
+    auto pred = [uuid = msg->DeviceUUID](const auto& device){
       return device.GetDeviceUUID() == uuid;
     };
 
+    TVector<ui32> timeoutedAgentDevicesIndexes;
+    auto fillAgentDeviceIndexes = [&timeoutedAgentDevicesIndexes](const NProto::TDeviceConfig& timeoutedDevice, const google::protobuf::RepeatedPtrField<NProto::TDeviceConfig>& devices) {
+        for (int i = 0; i < devices.size(); i++) {
+            if (devices[i].GetAgentId() == timeoutedDevice.GetAgentId()) {
+                timeoutedAgentDevicesIndexes.push_back(i);
+            }
+        }
+    };
+
     ui32 replicaIndex = 0;
-    bool primaryDevice = AnyOf(meta.GetDevices(), pred);
-    if (!primaryDevice) {
+    const NProto::TDeviceConfig* timeoutedDeviceConfig = FindIfPtr(meta.GetDevices(), pred);
+    if (timeoutedDeviceConfig) {
+        fillAgentDeviceIndexes(*timeoutedDeviceConfig, meta.GetDevices());
+    } else {
         for (int i = 0; i < meta.GetReplicas().size(); i++) {
             const auto& replica = meta.GetReplicas()[i];
-            primaryDevice = AnyOf(replica.GetDevices(), pred);
-            if (primaryDevice) {
+            timeoutedDeviceConfig = FindIfPtr(replica.GetDevices(), pred);
+            if (timeoutedDeviceConfig) {
                 replicaIndex = i + 1;
+                fillAgentDeviceIndexes(*timeoutedDeviceConfig, replica.GetDevices());
                 break;
             }
         }
     }
 
-    // Device
-    if (!primaryDevice) {
+    if (!timeoutedDeviceConfig) {
         auto response = std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
         NCloud::Reply(ctx, *ev, std::move(response));
         return;
     }
 
-    NProto::TUnavailableDevicesInfo newInfo;
-    if (meta.HasUnavailableDevicesInfo()) {
-        const auto& info = meta.GetUnavailableDevicesInfo();
-        Y_DEBUG_ABORT_UNLESS(!info.GetDeviceUUIDs().empty());
+    Y_DEBUG_ABORT_UNLESS(!timeoutedAgentDevicesIndexes.empty());
 
-        // Can't ignore more that one replica.
-        if (info.GetReplicaIndex() != replicaIndex) {
-            auto response =
-                std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
+    TVector<ui32> unavailableAgentDevicesIndexes;
+    for (const auto& info: meta.GetUnavailableDevicesInfo()) {
+        // Agent already accounted for.
+        if (info.GetAgentId() == timeoutedDeviceConfig->GetAgentId()) {
+            Y_DEBUG_ABORT_UNLESS(info.GetDevicesIndexes().size() == timeoutedAgentDevicesIndexes.ysize());
+
+            const auto& partActorId =
+                State->GetDiskRegistryBasedPartitionActor();
+            NCloud::Send(
+                ctx,
+                partActorId,
+                std::make_unique<NPartition::TEvPartition::
+                                     TEvEnterIncompleteMirrorRWModeRequest>(
+                    replicaIndex,
+                    timeoutedDeviceConfig->GetAgentId()));
+
+            auto response = std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
             NCloud::Reply(ctx, *ev, std::move(response));
             return;
         }
 
-        // We already know about this device.
-        if (auto it = Find(info.GetDeviceUUIDs(), msg->Record.GetDeviceUUID());
-            it != info.GetDeviceUUIDs().end())
-        {
-            auto response =
-                std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
+        Y_DEBUG_ABORT_UNLESS(IsSorted(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end()));
+        Y_DEBUG_ABORT_UNLESS(IsSorted(info.GetDevicesIndexes().begin(), info.GetDevicesIndexes().end()));
+
+        TVector<ui32> intersection;
+        SetIntersection(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end(), info.GetDevicesIndexes().begin(), info.GetDevicesIndexes().end(), std::back_inserter(intersection));
+
+        if (info.GetReplicaIndex() == replicaIndex) {
+            Y_DEBUG_ABORT_UNLESS(intersection.empty());
+        } else if (!intersection.empty()) {
+            // Can't disable RW on more than one replica.
+            auto response = std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
             NCloud::Reply(ctx, *ev, std::move(response));
             return;
         }
-
-        newInfo = info;
-        // Add device to unavail
     }
 
     // Enter the incomplete io state.
@@ -933,9 +960,12 @@ void TVolumeActor::HandleDeviceTimeouted(
     auto requestInfo =
         CreateRequestInfo(ev->Sender, ev->Cookie, ev->Get()->CallContext);
 
-    newInfo.AddDeviceUUIDs(msg->Record.GetDeviceUUID());
+    NProto::TUnavailableDevicesInfo newInfo;
+    newInfo.SetAgentId(timeoutedDeviceConfig->GetAgentId());
+    newInfo.SetAgentNodeId(timeoutedDeviceConfig->GetNodeId());
     newInfo.SetReplicaIndex(replicaIndex);
-    ExecuteTx<TTxVolume::TUpdateIncompleteMirrorIOMode>(
+    newInfo.MutableDevicesIndexes()->Assign(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end());
+    ExecuteTx<TUpdateIncompleteMirrorIOMode>(
         ctx,
         std::move(requestInfo),
         std::move(newInfo));
@@ -943,7 +973,7 @@ void TVolumeActor::HandleDeviceTimeouted(
 
 bool TVolumeActor::PrepareUpdateIncompleteMirrorIOMode(
     const TActorContext& ctx,
-    TTransactionContext& tx,
+    ITransactionBase::TTransactionContext& tx,
     TTxVolume::TUpdateIncompleteMirrorIOMode& args)
 {
     Y_UNUSED(ctx);
@@ -955,7 +985,7 @@ bool TVolumeActor::PrepareUpdateIncompleteMirrorIOMode(
 
 void TVolumeActor::ExecuteUpdateIncompleteMirrorIOMode(
     const TActorContext& ctx,
-    TTransactionContext& tx,
+    ITransactionBase::TTransactionContext& tx,
     TTxVolume::TUpdateIncompleteMirrorIOMode& args)
 {
     Y_UNUSED(ctx);
@@ -973,24 +1003,30 @@ void TVolumeActor::CompleteUpdateIncompleteMirrorIOMode(
                 std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
     NCloud::Reply(ctx, *args.RequestInfo, std::move(response));
 
-    // auto request = std::make_unique<NPartition::TEvPartition::TEnterIncompleteMirrorRWModeRequest>(args.Info.GetReplicaIndex());
-    auto request = std::make_unique<NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest>(args.Info.GetReplicaIndex());
-    auto ev = std::make_unique<NActors::IEventHandle>(
-        ctx.SelfID,
-        ctx.SelfID,
-        request.release()
-        // 0,    // flags
-        // 0  // cookie
-        // &ctx.SelfID    // forwardOnNondelivery
-    );
+    // auto request = std::make_unique<NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest>(args.Info.GetReplicaIndex());
+    // auto ev = std::make_unique<NActors::IEventHandle>(
+    //     ctx.SelfID,
+    //     ctx.SelfID,
+    //     request.release()
+    // );
 
-    // NCloud::NBlockStore::TRequestEvent
+    // auto keke = NActors::IEventHandle::Downcast<NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest>(ev.release());
+    // ForwardRequest<NPartition::TEvPartition::TEnterIncompleteMirrorRWModeMethod>(ctx, keke);
 
-    auto keke = NActors::IEventHandle::Downcast<NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest>(ev.release());
-    // ForwardRequest<NPartition::TEvPartition::TEnterIncompleteMirrorRWModeMethod>(ctx, ev->Release<NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest>());
-    ForwardRequest<NPartition::TEvPartition::TEnterIncompleteMirrorRWModeMethod>(ctx, keke);
-    // ctx.Send()
-    // State->GetDiskRegistryBasedPartitionActor()
+
+    // ??????????
+    // If there is no actor - its fine.
+    // If something wrong with config - not sure.
+    if (!State->Ready()) {
+        return;
+    }
+    const auto& partActorId = State->GetDiskRegistryBasedPartitionActor();
+    NCloud::Send(
+        ctx,
+        partActorId,
+        std::make_unique<
+            NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest>(
+            args.Info.GetReplicaIndex(), args.Info.GetAgentId()));
 
     // Send new mode to partition.
 
@@ -1204,6 +1240,8 @@ STFUNC(TVolumeActor::StateWork)
         HFunc(TEvVolume::TEvUpdateMigrationState, HandleUpdateMigrationState);
         HFunc(TEvVolume::TEvUpdateResyncState, HandleUpdateResyncState);
         HFunc(TEvVolume::TEvResyncFinished, HandleResyncFinished);
+
+        HFunc(TEvVolume::TEvDeviceTimeoutedRequest, HandleDeviceTimeouted);
 
         HFunc(
             TEvPartitionCommonPrivate::TEvLongRunningOperation,

@@ -13,7 +13,6 @@ namespace NCloud::NBlockStore::NStorage::NPartition {
     xxx(WaitReady,                       __VA_ARGS__)                          \
     xxx(StatPartition,                   __VA_ARGS__)                          \
     xxx(Drain,                           __VA_ARGS__)                          \
-    xxx(EnterIncompleteMirrorRWMode,     __VA_ARGS__)                          \
 // BLOCKSTORE_PARTITION_REQUESTS
 
 // requests forwarded from service to partition
@@ -91,13 +90,61 @@ struct TEvPartition
     {
         // 0 - for main devices; 1,2 - for mirror replicas
         const ui32 ReplicaIndex;
-        TEnterIncompleteMirrorRWModeRequest(ui32 replicaIndex)
+        const TString AgentId;
+        TEnterIncompleteMirrorRWModeRequest(
+            ui32 replicaIndex,
+            TString agentId)
             : ReplicaIndex(replicaIndex)
+            , AgentId(std::move(agentId))
         {}
     };
 
     struct TEnterIncompleteMirrorRWModeResponse
     {
+    };
+
+    struct TExitIncompleteMirrorRWModeRequest
+    {
+        // 0 - for main devices; 1,2 - for mirror replicas
+        const ui32 ReplicaIndex;
+        const TString AgentId;
+        TExitIncompleteMirrorRWModeRequest(
+            ui32 replicaIndex,
+            TString agentId)
+            : ReplicaIndex(replicaIndex)
+            , AgentId(std::move(agentId))
+        {}
+    };
+
+    struct TExitIncompleteMirrorRWModeResponse
+    {
+    };
+
+    struct TAgentIsUnavailable
+    {
+        const TString AgentId;
+
+        explicit TAgentIsUnavailable(TString agentId)
+            : AgentId(std::move(agentId))
+        {}
+    };
+
+    struct TAgentIsBackOnline
+    {
+        const TString AgentId;
+
+        explicit TAgentIsBackOnline(TString agentId)
+            : AgentId(std::move(agentId))
+        {}
+    };
+
+    struct TSelectiveMigrationFinished
+    {
+        const TString AgentId;
+
+        explicit TSelectiveMigrationFinished(TString agentId)
+            : AgentId(std::move(agentId))
+        {}
     };
 
     //
@@ -135,9 +182,11 @@ struct TEvPartition
         // ?? IO -> RW
         EvEnterIncompleteMirrorRWModeRequest,
         EvEnterIncompleteMirrorRWModeResponse,
-
-        EvExitIncompleteIOModeRequest,
-        EvExitIncompleteIOModeResponse,
+        EvExitIncompleteMirrorRWModeRequest,
+        EvExitIncompleteMirrorRWModeResponse,
+        EvAgentIsUnavailable,
+        EvAgentIsBackOnline,
+        EvSelectiveMigrationFinished,
 
         EvGarbageCollectorCompleted,
 
@@ -157,6 +206,41 @@ struct TEvPartition
     using TEvGarbageCollectorCompleted = TRequestEvent<
         TGarbageCollectorCompleted,
         EvGarbageCollectorCompleted
+    >;
+
+    using TEvEnterIncompleteMirrorRWModeRequest = TRequestEvent<
+        TEnterIncompleteMirrorRWModeRequest,
+        EvEnterIncompleteMirrorRWModeRequest
+    >;
+
+    using TEvEnterIncompleteMirrorRWModeResponse = TResponseEvent<
+        TEnterIncompleteMirrorRWModeResponse,
+        EvEnterIncompleteMirrorRWModeResponse
+    >;
+
+    using TEvExitIncompleteMirrorRWModeRequest = TRequestEvent<
+        TExitIncompleteMirrorRWModeRequest,
+        EvExitIncompleteMirrorRWModeRequest
+    >;
+
+    using TEvExitIncompleteMirrorRWModeResponse = TResponseEvent<
+        TExitIncompleteMirrorRWModeResponse,
+        EvExitIncompleteMirrorRWModeResponse
+    >;
+
+    using TEvAgentIsUnavailable = TRequestEvent<
+        TAgentIsUnavailable,
+        EvAgentIsUnavailable
+    >;
+
+    using TEvAgentIsBackOnline = TResponseEvent<
+        TAgentIsBackOnline,
+        EvAgentIsBackOnline
+    >;
+
+     using TEvSelectiveMigrationFinished = TResponseEvent<
+        TSelectiveMigrationFinished,
+        EvSelectiveMigrationFinished
     >;
 };
 
