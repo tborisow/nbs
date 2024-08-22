@@ -37,7 +37,7 @@ private:
     const TNonreplicatedPartitionConfigPtr PartConfig;
     const IProfileLogPtr ProfileLog;
     const IBlockDigestGeneratorPtr BlockDigestGenerator;
-    const TString RwClientId;
+    // const TString RwClientId;
     const NActors::TActorId PartNonreplActorId;
     const NActors::TActorId StatActorId;
     const NActors::TActorId MirrorPartitionActor;
@@ -66,13 +66,13 @@ public:
         TString rwClientId,
         NActors::TActorId partNonreplActorId,
         NActors::TActorId statActorId,
-        NActors::TActorId mirrorPartitionActor);
+        NActors::TActorId mirrorPartitionActor,
+        std::shared_ptr<TCompressedBitmap> migrationBlockMap);
 
     ~TSmartResyncActor() override;
 
 private:
-    [[nodiscard]] bool AgentIsUnavailable(const TString& agentId) const;
-
+    // IMigrationOwner implementation
     void OnBootstrap(const NActors::TActorContext& ctx) override;
     bool OnMessage(
         const NActors::TActorContext& ctx,
@@ -85,26 +85,6 @@ private:
      void OnMigrationError(const NActors::TActorContext& ctx) override;
 
 private:
-    STFUNC(StateWork);
-    STFUNC(StateZombie);
-
-    void HandleAgentIsUnavailable(
-        const NPartition::TEvPartition::TEvAgentIsUnavailable::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
-    void HandleAgentIsBackOnline(
-        const NPartition::TEvPartition::TEvAgentIsBackOnline::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
-    void HandleWriteOrZeroCompleted(
-        const TEvNonreplPartitionPrivate::TEvWriteOrZeroCompleted::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
-    void HandleEnterIncompleteMirrorRWMode(
-        const NPartition::TEvPartition::TEvEnterIncompleteMirrorRWModeRequest::
-            TPtr& ev,
-        const NActors::TActorContext& ctx);
-
     void HandlePoisonPill(
         const NActors::TEvents::TEvPoisonPill::TPtr& ev,
         const NActors::TActorContext& ctx);
@@ -112,22 +92,6 @@ private:
     void HandlePoisonTaken(
         const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
         const NActors::TActorContext& ctx);
-
-    template <typename TMethod>
-    void WriteRequest(
-        const typename TMethod::TRequest::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
-    template <typename TMethod>
-    void ReadBlocks(
-        const typename TMethod::TRequest::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
-    BLOCKSTORE_IMPLEMENT_REQUEST(WriteBlocks, TEvService);
-    BLOCKSTORE_IMPLEMENT_REQUEST(WriteBlocksLocal, TEvService);
-    BLOCKSTORE_IMPLEMENT_REQUEST(ZeroBlocks, TEvService);
-    // BLOCKSTORE_IMPLEMENT_REQUEST(Drain, NPartition::TEvPartition);
-    // ?????????????????????
 };
 
 }   // namespace NCloud::NBlockStore::NStorage

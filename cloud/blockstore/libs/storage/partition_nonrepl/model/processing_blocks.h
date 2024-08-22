@@ -19,7 +19,7 @@ class TProcessingBlocks
 private:
     ui64 BlockCount;
     ui32 BlockSize;
-    TCompressedBitmap BlockMap;
+    std::shared_ptr<TCompressedBitmap> BlockMap;
     ui64 LastReportedProcessingIndex = 0;
     ui64 CurrentProcessingIndex = 0;
     ui64 NextProcessingIndex = 0;
@@ -33,7 +33,7 @@ public:
     TProcessingBlocks(
         ui64 blockCount,
         ui32 blockSize,
-        TCompressedBitmap blockMap);
+        std::shared_ptr<TCompressedBitmap> blockMap);
 
     TProcessingBlocks(TProcessingBlocks&& other) noexcept;
     TProcessingBlocks& operator=(TProcessingBlocks&& other) noexcept;

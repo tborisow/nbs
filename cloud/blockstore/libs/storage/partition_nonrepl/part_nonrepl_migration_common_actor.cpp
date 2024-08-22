@@ -52,7 +52,7 @@ TNonreplicatedPartitionMigrationCommonActor::
         ui64 blockSize,
         IProfileLogPtr profileLog,
         IBlockDigestGeneratorPtr digestGenerator,
-        TCompressedBitmap migrationBlockMap,
+        std::shared_ptr<TCompressedBitmap> migrationBlockMap,
         TString rwClientId,
         NActors::TActorId statActorId,
         ui32 maxIoDepth)
