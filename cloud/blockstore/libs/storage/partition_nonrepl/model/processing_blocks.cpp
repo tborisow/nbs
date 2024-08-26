@@ -11,7 +11,6 @@ TProcessingBlocks::TProcessingBlocks(
     : BlockCount(blockCount)
     , BlockSize(blockSize)
     , BlockMap(std::make_shared<TCompressedBitmap>(BlockCount))
-    , LastReportedProcessingIndex(initialProcessingIndex)
     , CurrentProcessingIndex(initialProcessingIndex)
     , NextProcessingIndex(CalculateNextProcessingIndex())
 {
