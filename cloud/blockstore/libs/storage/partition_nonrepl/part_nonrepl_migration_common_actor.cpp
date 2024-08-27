@@ -109,6 +109,11 @@ ui64 TNonreplicatedPartitionMigrationCommonActor::
     return ProcessingBlocks.GetBlockCountNeedToBeProcessed();
 }
 
+ui64 TNonreplicatedPartitionMigrationCommonActor::GetProcessedBlockCount() const
+{
+    return ProcessingBlocks.GetProcessedBlockCount();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void TNonreplicatedPartitionMigrationCommonActor::HandlePoisonPill(

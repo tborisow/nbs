@@ -190,6 +190,10 @@ public:
     // processed.
     ui64 GetBlockCountNeedToBeProcessed() const;
 
+    // Called from the inheritor to get the number of blocks that were
+    // processed.
+    ui64 GetProcessedBlockCount() const;
+
     // IPoisonPillHelperOwner implementation
     void Die(const NActors::TActorContext& ctx) override
     {

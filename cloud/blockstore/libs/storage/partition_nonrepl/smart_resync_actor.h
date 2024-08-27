@@ -28,37 +28,51 @@
 
 namespace NCloud::NBlockStore::NStorage {
 
+////////////////////////////////////////////////////////////////////////////////
+
+class ISmartResyncDelegate
+{
+public:
+    virtual ~ISmartResyncDelegate() = default;
+
+    // Notifies that a sufficiently large sequence of data has been migrated.
+    // The size is determined by the settings.
+    virtual void OnMigrationProgress(
+        const NActors::TActorContext& ctx,
+        ui64 processedBlockCount,
+        ui64 blockCountNeedToBeProcessed) = 0;
+
+    // Notifies that the data migration was completed successfully.
+    virtual void OnMigrationFinished(const NActors::TActorContext& ctx) = 0;
+
+    // Notifies that a non-retriable error occurred during the migration and it
+    // was stopped.
+    virtual void OnMigrationError(const NActors::TActorContext& ctx) = 0;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
 class TSmartResyncActor final
     : public TNonreplicatedPartitionMigrationCommonActor,
         public IMigrationOwner
 {
 private:
+    ISmartResyncDelegate* const Delegate;
     const TStorageConfigPtr Config;
     const TNonreplicatedPartitionConfigPtr PartConfig;
     const IProfileLogPtr ProfileLog;
     const IBlockDigestGeneratorPtr BlockDigestGenerator;
-    // const TString RwClientId;
     const NActors::TActorId PartNonreplActorId;
-    const NActors::TActorId StatActorId;
+    // const NActors::TActorId StatActorId;
     const NActors::TActorId MirrorPartitionActor;
+    const NActors::TActorId ParentActor;
+    const TString AgentId;
 
     std::shared_ptr<TCompressedBitmap> BlockMap;
 
 public:
-    // TNonreplicatedPartitionMigrationCommonActor(
-    //     IMigrationOwner* migrationOwner,
-    //     TStorageConfigPtr config,
-    //     TString diskId,
-    //     ui64 blockCount,
-    //     ui64 blockSize,
-    //     IProfileLogPtr profileLog,
-    //     IBlockDigestGeneratorPtr digestGenerator,
-    //     TCompressedBitmap migrationBlockMap,
-    //     TString rwClientId,
-    //     NActors::TActorId statActorId,
-    //     ui32 maxIoDepth);
-
     TSmartResyncActor(
+        ISmartResyncDelegate* delegate,
         TStorageConfigPtr config,
         TNonreplicatedPartitionConfigPtr partConfig,
         IProfileLogPtr profileLog,
@@ -67,7 +81,9 @@ public:
         NActors::TActorId partNonreplActorId,
         NActors::TActorId statActorId,
         NActors::TActorId mirrorPartitionActor,
-        std::shared_ptr<TCompressedBitmap> migrationBlockMap);
+        NActors::TActorId parentActor,
+        std::shared_ptr<TCompressedBitmap> migrationBlockMap,
+        TString agentId);
 
     ~TSmartResyncActor() override;
 
@@ -77,7 +93,6 @@ private:
     bool OnMessage(
         const NActors::TActorContext& ctx,
         TAutoPtr<NActors::IEventHandle>& ev) override;
-    [[nodiscard]]  TDuration CalculateMigrationTimeout(TBlockRange64 range) override;
      void OnMigrationProgress(
         const NActors::TActorContext& ctx,
         ui64 migrationIndex) override;
@@ -85,13 +100,7 @@ private:
      void OnMigrationError(const NActors::TActorContext& ctx) override;
 
 private:
-    void HandlePoisonPill(
-        const NActors::TEvents::TEvPoisonPill::TPtr& ev,
-        const NActors::TActorContext& ctx);
 
-    void HandlePoisonTaken(
-        const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
-        const NActors::TActorContext& ctx);
 };
 
 }   // namespace NCloud::NBlockStore::NStorage
