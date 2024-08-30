@@ -227,6 +227,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
         // TODO: MARK DELETED BLOCKS!
     }
 
+    // Who will be recipient of ok request: SmartResyncActor or PartNonreplActorId ?
     ctx.Send(std::make_unique<IEventHandle>(
         PartNonreplActorId,
         ev->Sender,
