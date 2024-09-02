@@ -516,6 +516,9 @@ void TMirrorPartitionActor::HandleEnterIncompleteMirrorRWMode(
             std::make_unique<TIncompleteMirrorRWModeControllerActor>(
                 Config,
                 State.GetReplicaInfos()[msg->ReplicaIndex].Config,
+                ProfileLog,
+                BlockDigestGenerator,
+                State.GetRWClientId(),
                 State.GetRealReplicaActors()[msg->ReplicaIndex],
                 StatActorId,
                 SelfId()));

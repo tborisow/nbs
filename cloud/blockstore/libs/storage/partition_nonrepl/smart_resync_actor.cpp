@@ -78,6 +78,7 @@ bool TSmartResyncActor::OnMessage(
     const NActors::TActorContext& ctx,
     TAutoPtr<NActors::IEventHandle>& ev)
 {
+    Y_UNUSED(ctx);
     switch (ev->GetTypeRewrite()) {
         // HFunc(
         //     TEvVolumePrivate::TEvShadowDiskAcquired,
@@ -117,6 +118,7 @@ void TSmartResyncActor::OnMigrationProgress(
     const NActors::TActorContext& ctx,
     ui64 migrationIndex)
 {
+    Y_UNUSED(migrationIndex);
     Delegate->OnMigrationProgress(ctx, GetProcessedBlockCount(), GetBlockCountNeedToBeProcessed());
 }
 

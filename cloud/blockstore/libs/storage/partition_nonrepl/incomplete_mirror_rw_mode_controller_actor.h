@@ -50,7 +50,7 @@ private:
         EAgentState State;
         NActors::TActorId AgentAvailabilityWaiter;
         NActors::TActorId SmartResyncActor;
-        std::unique_ptr<TCompressedBitmap> CleanBlockMap;
+        std::shared_ptr<TCompressedBitmap> CleanBlocksMap;
     };
     THashMap<TString, TAgentState> AgentState;
 
@@ -74,6 +74,26 @@ public:
 
 private:
     [[nodiscard]] bool AgentIsUnavailable(const TString& agentId) const;
+
+    void TrimRequest(
+        const TEvService::TEvWriteBlocksRequest::TPtr& ev,
+        TBlockRange64 rangeToWrite,
+        TBlockRange64 rangeToDelete,
+        const TString& unavailableAgentId);
+    void TrimRequest(
+        const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
+        TBlockRange64 rangeToWrite,
+        TBlockRange64 rangeToDelete,
+        const TString& unavailableAgentId);
+    void TrimRequest(
+        const TEvService::TEvZeroBlocksRequest::TPtr& ev,
+        TBlockRange64 rangeToWrite,
+        TBlockRange64 rangeToDelete,
+        const TString& unavailableAgentId);
+
+    void MarkBlocksAsDirty(
+        const TString& unavailableAgentId,
+        TBlockRange64 range);
 
 private:
     STFUNC(StateWork);
@@ -100,9 +120,9 @@ private:
         const NActors::TEvents::TEvPoisonPill::TPtr& ev,
         const NActors::TActorContext& ctx);
 
-    void HandlePoisonTaken(
-        const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
-        const NActors::TActorContext& ctx);
+    // void HandlePoisonTaken(
+    //     const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
+    //     const NActors::TActorContext& ctx);
 
     template <typename TMethod>
     void WriteRequest(
@@ -112,6 +132,10 @@ private:
     template <typename TMethod>
     void ReadBlocks(
         const typename TMethod::TRequest::TPtr& ev,
+        const NActors::TActorContext& ctx);
+
+    void ForwardUnexpectedEvent(
+        TAutoPtr<::NActors::IEventHandle>& ev,
         const NActors::TActorContext& ctx);
 
     BLOCKSTORE_IMPLEMENT_REQUEST(WriteBlocks, TEvService);

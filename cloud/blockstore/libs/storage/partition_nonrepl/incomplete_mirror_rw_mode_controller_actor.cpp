@@ -14,13 +14,35 @@
 
 namespace NCloud::NBlockStore::NStorage {
 
+////////////////////////////////////////////////////////////////////////////////
+namespace {
+
 using namespace NActors;
 
 using namespace NKikimr;
 
-using TEvPartition = NPartition::TEvPartition;
+template <typename TEvent>
+void ForwardMessageToActor(
+    TEvent& ev,
+    const NActors::TActorContext& ctx,
+    NActors::TActorId destActor)
+{
+    NActors::TActorId nondeliveryActor = ev->GetForwardOnNondeliveryRecipient();
+    auto message = std::make_unique<IEventHandle>(
+        destActor,
+        ev->Sender,
+        ev->ReleaseBase().Release(),
+        ev->Flags,
+        ev->Cookie,
+        ev->Flags & NActors::IEventHandle::FlagForwardOnNondelivery
+            ? &nondeliveryActor
+            : nullptr);
+    ctx.Send(std::move(message));
+}
 
-LWTRACE_USING(BLOCKSTORE_STORAGE_PROVIDER);
+}   // namespace
+
+////////////////////////////////////////////////////////////////////////////////
 
 TIncompleteMirrorRWModeControllerActor::TIncompleteMirrorRWModeControllerActor(
         TStorageConfigPtr config,
@@ -42,41 +64,6 @@ TIncompleteMirrorRWModeControllerActor::TIncompleteMirrorRWModeControllerActor(
 {}
 
 TIncompleteMirrorRWModeControllerActor::~TIncompleteMirrorRWModeControllerActor() = default;
-
-template <typename TMethod>
-void TIncompleteMirrorRWModeControllerActor::WriteRequest(
-    const typename TMethod::TRequest::TPtr& ev,
-    const TActorContext& ctx)
-{
-    // Either send it or return success and mark the block.
-    // If we send it, then we may be need to break it into two pieces.
-
-
-    auto requestInfo = CreateRequestInfo(
-        ev->Sender,
-        ev->Cookie,
-        ev->Get()->CallContext);
-
-    auto& record = ev->Get()->Record;
-    // const auto blockRange = TBlockRange64::WithLength(
-    //     record.GetStartIndex(),
-    //     record.GetBlocksCount());
-
-    auto request = std::make_unique<typename TMethod::TRequest>();
-    request->CallContext = requestInfo->CallContext;
-    request->Record = std::move(record);
-
-    auto event = std::make_unique<IEventHandle>(
-        PartNonreplActorId,
-        requestInfo->Sender,
-        request.release(),
-        NActors::IEventHandle::FlagForwardOnNondelivery,
-        requestInfo->Cookie,
-        &requestInfo->Sender   // forwardOnNondelivery ???????????????????
-    );
-
-    ctx.Send(event.release());
-}
 
 void TIncompleteMirrorRWModeControllerActor::Bootstrap(const TActorContext& ctx)
 {
@@ -103,6 +90,20 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsUnavailable(
         auto& state = AgentState[msg->AgentId];
         state.State = EAgentState::Unavailable;
         state.AgentAvailabilityWaiter = waiterActorId;
+        state.CleanBlocksMap = std::make_shared<TCompressedBitmap>(PartConfig->GetBlockCount());
+        state.CleanBlocksMap->Set(0, PartConfig->GetBlockCount());
+
+        // ui64 blockIndex = 0;
+        // const auto& devices = PartConfig->GetDevices();
+        // for (const auto& device: devices) {
+        //     if (device.GetAgentId() != msg->AgentId) {
+        //         // Skip this device for migration
+        //         state.CleanBlockMap->Set(
+        //             blockIndex,
+        //             blockIndex + device.GetBlocksCount() - 1);
+        //     }
+        //     blockIndex += device.GetBlocksCount();
+        // }
 
         if (state.SmartResyncActor) {
             NCloud::Send<TEvents::TEvPoisonPill>(ctx, state.SmartResyncActor);
@@ -154,6 +155,83 @@ bool TIncompleteMirrorRWModeControllerActor::AgentIsUnavailable(
     return state && state->State == EAgentState::Unavailable;
 }
 
+void TIncompleteMirrorRWModeControllerActor::MarkBlocksAsDirty(
+    const TString& unavailableAgentId,
+    TBlockRange64 range)
+{
+    Y_DEBUG_ABORT_UNLESS(AgentState.contains(unavailableAgentId));
+    auto& state = AgentState[unavailableAgentId];
+    Y_DEBUG_ABORT_UNLESS(state.CleanBlocksMap);
+    state.CleanBlocksMap->Unset(range.Start, range.End);
+}
+
+
+void TIncompleteMirrorRWModeControllerActor::TrimRequest(
+    const TEvService::TEvWriteBlocksRequest::TPtr& ev,
+    TBlockRange64 rangeToWrite,
+    TBlockRange64 rangeToDelete,
+    const TString& unavailableAgentId)
+{
+    auto& request = ev->Get()->Record;
+    Y_DEBUG_ABORT_UNLESS(rangeToWrite.Size() > 0);
+    Y_DEBUG_ABORT_UNLESS(rangeToDelete.Size() > 0);
+    Y_DEBUG_ABORT_UNLESS(!unavailableAgentId.empty());
+
+    const ui64 oldStartIndex = request.GetStartIndex();
+    request.SetStartIndex(rangeToWrite.Start);
+    request.MutableBlocks()->MutableBuffers()->DeleteSubrange(rangeToDelete.Start - oldStartIndex, rangeToDelete.Size());
+
+    Y_DEBUG_ABORT_UNLESS(request.GetBlocks().GetBuffers().size() > 0);
+    Y_DEBUG_ABORT_UNLESS(request.GetBlocks().GetBuffers().size() == static_cast<int>(rangeToWrite.Size()));
+
+    MarkBlocksAsDirty(unavailableAgentId, rangeToWrite);
+}
+
+void TIncompleteMirrorRWModeControllerActor::TrimRequest(
+    const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
+    TBlockRange64 rangeToWrite,
+    TBlockRange64 rangeToDelete,
+    const TString& unavailableAgentId)
+{
+    auto* msg = ev->Get();
+    const ui64 oldStartIndex = msg->Record.GetStartIndex();
+    msg->Record.SetStartIndex(rangeToWrite.Start);
+
+    auto guard = msg->Record.Sglist.Acquire();
+    const auto& list = guard.Get();
+
+    auto partialList2 = TSgList();
+    ui64 blockIndex = oldStartIndex;
+    for (const TBlockDataRef& block: list) {
+        if (blockIndex >= rangeToWrite.Start && blockIndex < rangeToWrite.End) {
+            Y_DEBUG_ABORT_UNLESS(
+                blockIndex < rangeToDelete.Start ||
+                blockIndex > rangeToDelete.End);
+            partialList2.push_back(block);
+        }
+        blockIndex += block.Size() / msg->Record.BlockSize;
+    }
+
+    MarkBlocksAsDirty(unavailableAgentId, rangeToWrite);
+}
+
+void TIncompleteMirrorRWModeControllerActor::TrimRequest(
+    const TEvService::TEvZeroBlocksRequest::TPtr& ev,
+    TBlockRange64 rangeToWrite,
+    TBlockRange64 rangeToDelete,
+    const TString& unavailableAgentId)
+{
+    auto& request = ev->Get()->Record;
+    Y_DEBUG_ABORT_UNLESS(rangeToWrite.Size() > 0);
+    Y_DEBUG_ABORT_UNLESS(rangeToDelete.Size() > 0);
+    Y_DEBUG_ABORT_UNLESS(!unavailableAgentId.empty());
+
+    request.SetStartIndex(rangeToWrite.Start);
+    request.SetBlocksCount(rangeToWrite.Size());
+
+    MarkBlocksAsDirty(unavailableAgentId, rangeToWrite);
+}
+
 // void TIncompleteMirrorRWModeControllerActor::HandleReadBlocks(
 //     const TEvService::TEvReadBlocksRequest::TPtr& ev,
 //     const TActorContext& ctx)
@@ -168,8 +246,9 @@ bool TIncompleteMirrorRWModeControllerActor::AgentIsUnavailable(
 //     ReadBlocks<TEvService::TReadBlocksLocalMethod>(ev, ctx);
 // }
 
-void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
-    const TEvService::TEvWriteBlocksRequest::TPtr& ev,
+template <typename TMethod>
+void TIncompleteMirrorRWModeControllerActor::WriteRequest(
+    const typename TMethod::TRequest::TPtr& ev,
     const TActorContext& ctx)
 {
     auto* msg = ev->Get();
@@ -200,31 +279,31 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
     }
 
     if (availableAgentCount == 0) {
-        // TODO: Mark the blocks and return success to mirror3 partition.
-        // for (const auto& deviceRequest: deviceRequests) {
-        //     AgentState[]
-        // }
+        for (const auto& deviceRequest: deviceRequests) {
+            Y_DEBUG_ABORT_UNLESS(
+                AgentState.contains(deviceRequest.Device.GetAgentId()));
+            auto& state = AgentState[deviceRequest.Device.GetAgentId()];
+            Y_DEBUG_ABORT_UNLESS(state.CleanBlocksMap);
+
+            state.CleanBlocksMap->Unset(
+                deviceRequest.BlockRange.Start,
+                deviceRequest.BlockRange.End);
+        }
+
+        // Repond with fake "S_OK".
+        auto response = std::make_unique<TEvService::TEvWriteBlocksResponse>();
+        NCloud::Reply(ctx, *ev, std::move(response));
         return;
     }
 
-    auto request = std::make_unique<TEvService::TEvWriteBlocksRequest>();
+    using TRequest = TMethod::TRequest;
+    auto request = std::make_unique<TRequest>();
     request->Record = std::move(msg->Record);
     request->CallContext = msg->CallContext;
-    // In this case we should discard blocks which would be written in the unavailable agent.
     if (deviceRequests.size() == 2 && availableAgentCount == 1) {
+        // In this case we should discard blocks which would be written in the unavailable agent.
         Y_DEBUG_ABORT_UNLESS(requestBlockCount == rangeToDelete.Size() + rangeToWrite.Size());
-        Y_DEBUG_ABORT_UNLESS(rangeToWrite.Size() > 0);
-        Y_DEBUG_ABORT_UNLESS(rangeToDelete.Size() > 0);
-        Y_DEBUG_ABORT_UNLESS(!unavailableAgentId.empty());
-
-        const ui64 oldStartIndex = request->Record.GetStartIndex();
-        request->Record.SetStartIndex(rangeToWrite.Start);
-        request->Record.MutableBlocks()->MutableBuffers()->DeleteSubrange(rangeToDelete.Start - oldStartIndex, rangeToDelete.Size());
-
-        Y_DEBUG_ABORT_UNLESS(request->Record.GetBlocks().GetBuffers().size() > 0);
-        Y_DEBUG_ABORT_UNLESS(request->Record.GetBlocks().GetBuffers().size() == static_cast<int>(rangeToWrite.Size()));
-
-        // TODO: MARK DELETED BLOCKS!
+        TrimRequest(ev, rangeToWrite, rangeToDelete, unavailableAgentId);
     }
 
     // Who will be recipient of ok request: SmartResyncActor or PartNonreplActorId ?
@@ -237,83 +316,38 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
         &ev->Sender));
 }
 
+void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
+    const TEvService::TEvWriteBlocksRequest::TPtr& ev,
+    const TActorContext& ctx)
+{
+    WriteRequest<TEvService::TWriteBlocksMethod>(ev, ctx);
+    auto request = std::make_unique<TEvService::TWriteBlocksMethod::TRequest>();
+}
+
 void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocksLocal(
     const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
     const TActorContext& ctx)
 {
-    auto* msg = ev->Get();
-
-    const ui32 requestBlockCount = CalculateWriteRequestBlockCount(
-        msg->Record,
-        PartConfig->GetBlockSize());
-    const auto blockRange = TBlockRange64::WithLength(
-        msg->Record.GetStartIndex(),
-        requestBlockCount);
-    auto deviceRequests = PartConfig->ToDeviceRequests(blockRange);
-
-    // The code down below relies on this.
-    Y_DEBUG_ABORT_UNLESS(deviceRequests.size() <= 2);
-
-    TBlockRange64 rangeToWrite;
-    TBlockRange64 rangeToDelete;
-    size_t availableAgentCount = 0;
-    for (const auto& deviceRequest: deviceRequests) {
-        if (AgentIsUnavailable(deviceRequest.Device.GetAgentId())) {
-            rangeToDelete = deviceRequest.BlockRange;
-        } else {
-            availableAgentCount++;
-            rangeToWrite = deviceRequest.BlockRange;
-        }
-    }
-
-    auto request = std::make_unique<TEvService::TEvWriteBlocksLocalRequest>();
-    request->Record = std::move(msg->Record);
-    request->CallContext = msg->CallContext;
-
-    if (deviceRequests.size() > 1 &&
-        availableAgentCount != deviceRequests.size())
-    {
-        const ui64 oldStartIndex = request->Record.GetStartIndex();
-        request->Record.SetStartIndex(rangeToWrite.Start);
-
-        auto guard = msg->Record.Sglist.Acquire();
-        const auto& list = guard.Get();
-
-        auto partialList = TSgList(
-            list.cbegin() + (rangeToWrite.Start - oldStartIndex),
-            list.cbegin() + rangeToWrite.Size());
-        request->Record.Sglist =
-            request->Record.Sglist.Create(std::move(partialList));
-    }
-
-    ctx.Send(std::make_unique<IEventHandle>(
-        PartNonreplActorId,
-        ev->Sender,
-        request.release(),
-        ev->Flags,
-        ev->Cookie,
-        &ev->Sender));
+    WriteRequest<TEvService::TWriteBlocksLocalMethod>(ev, ctx);
 }
 
 void TIncompleteMirrorRWModeControllerActor::HandleZeroBlocks(
     const TEvService::TEvZeroBlocksRequest::TPtr& ev,
     const TActorContext& ctx)
 {
-    // TODO(komarevtsev): IMPLEMENT
-
-
-    ctx.Send(std::make_unique<IEventHandle>(
-        PartNonreplActorId,
-        ev->Sender,
-        ev->ReleaseBase().Release(),
-        ev->Flags,
-        ev->Cookie,
-        &ev->Sender));
+    WriteRequest<TEvService::TZeroBlocksMethod>(ev, ctx);
 }
 
+// void TIncompleteMirrorRWModeControllerActor::HandleDrain(
+//     const NPartition::TEvPartition::TEvDrainRequest::TPtr& ev,
+//     const NActors::TActorContext& ctx)
+// {
+//     ForwardMessageToActor(ev, ctx, PartNonreplActorId);
+// }
+
 void TIncompleteMirrorRWModeControllerActor::HandlePoisonPill(
-    const NActors::TEvents::TEvPoisonPill::TPtr& ev,
-    const NActors::TActorContext& ctx)
+    const TEvents::TEvPoisonPill::TPtr& ev,
+    const TActorContext& ctx)
 {
     Y_UNUSED(ev);
 
@@ -337,12 +371,14 @@ STFUNC(TIncompleteMirrorRWModeControllerActor::StateWork)
     switch (ev->GetTypeRewrite()) {
         // HFunc(TEvService::TEvReadBlocksRequest, HandleReadBlocks);
         HFunc(TEvService::TEvWriteBlocksRequest, HandleWriteBlocks);
+        HFunc(TEvService::TEvWriteBlocksLocalRequest, HandleWriteBlocksLocal);
         HFunc(TEvService::TEvZeroBlocksRequest, HandleZeroBlocks);
+
         HFunc(NPartition::TEvPartition::TEvAgentIsUnavailable, HandleAgentIsUnavailable);
         HFunc(NPartition::TEvPartition::TEvAgentIsBackOnline, HandleAgentIsBackOnline);
+        // HFunc(NPartition::TEvPartition::TEvDrainRequest, HandleDrain);
 
         // HFunc(TEvService::TEvReadBlocksLocalRequest, HandleReadBlocksLocal);
-        // HFunc(TEvService::TEvWriteBlocksLocalRequest, HandleWriteBlocksLocal);
 
         // HFunc(TEvPartition::TEvDrainRequest, DrainActorCompanion.HandleDrain);
         // HFunc(TEvPartition::TEvEnterIncompleteMirrorRWModeRequest, HandleEnterIncompleteMirrorRWMode);
@@ -373,9 +409,18 @@ STFUNC(TIncompleteMirrorRWModeControllerActor::StateWork)
         HFunc(TEvents::TEvPoisonPill, HandlePoisonPill);
 
         default:
-            HandleUnexpectedEvent(ev, TBlockStoreComponents::PARTITION);
+            // NOTE: We handle all unexpected requests and proxy them to
+            // nonreplicated partititon.
+            ForwardUnexpectedEvent(ev, ActorContext());
             break;
     }
+}
+
+void TIncompleteMirrorRWModeControllerActor::ForwardUnexpectedEvent(
+    TAutoPtr<::NActors::IEventHandle>& ev,
+    const TActorContext& ctx)
+{
+    ForwardMessageToActor(ev, ctx, PartNonreplActorId);
 }
 
 STFUNC(TIncompleteMirrorRWModeControllerActor::StateZombie)
@@ -390,9 +435,7 @@ STFUNC(TIncompleteMirrorRWModeControllerActor::StateZombie)
         // HFunc(TEvService::TEvReadBlocksRequest, RejectReadBlocks);
         HFunc(TEvService::TEvWriteBlocksRequest, RejectWriteBlocks);
         HFunc(TEvService::TEvZeroBlocksRequest, RejectZeroBlocks);
-
-        // HFunc(TEvService::TEvReadBlocksLocalRequest, RejectReadBlocksLocal);
-        // HFunc(TEvService::TEvWriteBlocksLocalRequest, RejectWriteBlocksLocal);
+        HFunc(TEvService::TEvWriteBlocksLocalRequest, RejectWriteBlocksLocal);
 
         // HFunc(NPartition::TEvPartition::TEvDrainRequest, RejectDrain);
 
@@ -410,7 +453,7 @@ STFUNC(TIncompleteMirrorRWModeControllerActor::StateZombie)
         // IgnoreFunc(TEvVolume::TEvDiskRegistryBasedPartitionCounters);
 
         IgnoreFunc(TEvents::TEvPoisonPill);
-        HFunc(TEvents::TEvPoisonTaken, HandlePoisonTaken);
+        // HFunc(TEvents::TEvPoisonTaken, HandlePoisonTaken);
 
         default:
             HandleUnexpectedEvent(ev, TBlockStoreComponents::PARTITION);

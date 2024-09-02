@@ -104,8 +104,6 @@ private:
 
     TChangedRangesMap NonZeroRangesMap;
 
-    // The size of whole migration that will be performed by this actor.
-    ui64 MigrationBlockCount;
     // When we migrated a block whose range contains or exceeds a persistently
     // stored offset of the progress of the entire migration, we remember this block count and wait for all blocks with addresses less than this offset to
     // migrate. After that, we save the execution progress persistently by

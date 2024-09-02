@@ -305,7 +305,7 @@ public:
     }
 
     void UpdateIncompleteMirrorIOMode(NProto::TUnavailableDevicesInfo info) {
-        *Meta.MutableUnavailableDevicesInfo() = std::move(info);
+        Meta.MutableUnavailableDevicesInfo()->Add(std::move(info));
     }
 
     void SetStartPartitionsNeeded(bool startPartitionsNeeded)

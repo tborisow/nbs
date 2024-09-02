@@ -15,6 +15,7 @@
 #include <cloud/blockstore/libs/storage/service/service_events_private.h>
 
 #include <cloud/storage/core/libs/common/media.h>
+#include "cloud/storage/core/libs/diagnostics/critical_events.h"
 #include <cloud/storage/core/libs/throttling/tablet_throttler.h>
 #include <cloud/storage/core/libs/throttling/tablet_throttler_logger.h>
 
@@ -857,8 +858,10 @@ void TVolumeActor::HandleDeviceTimeouted(
     const auto mediaKind = static_cast<NCloud::NProto::EStorageMediaKind>(
         config.GetStorageMediaKind());
     if (!IsReliableDiskRegistryMediaKind(mediaKind)) {
-        auto response = std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
-        NCloud::Reply(ctx, *ev, std::move(response));
+        NCloud::Reply(
+            ctx,
+            *ev,
+            std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>());
         return;
     }
 
@@ -916,13 +919,13 @@ void TVolumeActor::HandleDeviceTimeouted(
         return;
     }
 
-    Y_DEBUG_ABORT_UNLESS(!timeoutedAgentDevicesIndexes.empty());
+    STORAGE_CHECK_PRECONDITION(!timeoutedAgentDevicesIndexes.empty());
 
     TVector<ui32> unavailableAgentDevicesIndexes;
     for (const auto& info: meta.GetUnavailableDevicesInfo()) {
-        // Agent already accounted for.
+        // Whether the agent is lagging already.
         if (info.GetAgentId() == timeoutedDeviceConfig->GetAgentId()) {
-            Y_DEBUG_ABORT_UNLESS(info.GetDevicesIndexes().size() == timeoutedAgentDevicesIndexes.ysize());
+            STORAGE_CHECK_PRECONDITION(info.GetDevicesIndexes().size() == timeoutedAgentDevicesIndexes.ysize());
 
             const auto& partActorId =
                 State->GetDiskRegistryBasedPartitionActor();
@@ -939,14 +942,15 @@ void TVolumeActor::HandleDeviceTimeouted(
             return;
         }
 
-        Y_DEBUG_ABORT_UNLESS(IsSorted(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end()));
-        Y_DEBUG_ABORT_UNLESS(IsSorted(info.GetDevicesIndexes().begin(), info.GetDevicesIndexes().end()));
+        STORAGE_CHECK_PRECONDITION(IsSorted(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end()));
+        STORAGE_CHECK_PRECONDITION(IsSorted(info.GetDevicesIndexes().begin(), info.GetDevicesIndexes().end()));
 
         TVector<ui32> intersection;
         SetIntersection(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end(), info.GetDevicesIndexes().begin(), info.GetDevicesIndexes().end(), std::back_inserter(intersection));
 
         if (info.GetReplicaIndex() == replicaIndex) {
-            Y_DEBUG_ABORT_UNLESS(intersection.empty());
+            // "intersection" should be empty since new lagging agent can't have mutual devices with some other lagging agent.
+            STORAGE_CHECK_PRECONDITION(intersection.empty());
         } else if (!intersection.empty()) {
             // Can't disable RW on more than one replica.
             auto response = std::make_unique<TEvVolume::TEvDeviceTimeoutedResponse>();
@@ -962,7 +966,6 @@ void TVolumeActor::HandleDeviceTimeouted(
 
     NProto::TUnavailableDevicesInfo newInfo;
     newInfo.SetAgentId(timeoutedDeviceConfig->GetAgentId());
-    newInfo.SetAgentNodeId(timeoutedDeviceConfig->GetNodeId());
     newInfo.SetReplicaIndex(replicaIndex);
     newInfo.MutableDevicesIndexes()->Assign(timeoutedAgentDevicesIndexes.begin(), timeoutedAgentDevicesIndexes.end());
     ExecuteTx<TUpdateIncompleteMirrorIOMode>(
