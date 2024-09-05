@@ -38,16 +38,16 @@ public:
     // Notifies that a sufficiently large sequence of data has been migrated.
     // The size is determined by the settings.
     virtual void OnMigrationProgress(
-        const NActors::TActorContext& ctx,
+        const TString& agentId,
         ui64 processedBlockCount,
         ui64 blockCountNeedToBeProcessed) = 0;
 
     // Notifies that the data migration was completed successfully.
-    virtual void OnMigrationFinished(const NActors::TActorContext& ctx) = 0;
+    virtual void OnMigrationFinished(const TString& agentId) = 0;
 
     // Notifies that a non-retriable error occurred during the migration and it
     // was stopped.
-    virtual void OnMigrationError(const NActors::TActorContext& ctx) = 0;
+    virtual void OnMigrationError(const TString& agentId) = 0;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

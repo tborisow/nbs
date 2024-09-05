@@ -2,11 +2,6 @@
 
 #include "public.h"
 
-#include "checksum_range.h"
-#include "config.h"
-#include "part_mirror_state.h"
-#include "part_nonrepl_events_private.h"
-
 #include <cloud/blockstore/libs/diagnostics/public.h>
 #include <cloud/blockstore/libs/rdma/iface/public.h>
 #include <cloud/blockstore/libs/storage/api/disk_registry.h>
@@ -18,6 +13,11 @@
 #include <cloud/blockstore/libs/storage/model/requests_in_progress.h>
 #include <cloud/blockstore/libs/storage/partition_common/drain_actor_companion.h>
 #include <cloud/blockstore/libs/storage/partition_common/get_changed_blocks_companion.h>
+#include <cloud/blockstore/libs/storage/partition_nonrepl/checksum_range.h>
+#include <cloud/blockstore/libs/storage/partition_nonrepl/config.h>
+#include <cloud/blockstore/libs/storage/partition_nonrepl/part_mirror_state.h>
+#include <cloud/blockstore/libs/storage/partition_nonrepl/part_nonrepl_events_private.h>
+#include <cloud/blockstore/libs/storage/partition_nonrepl/smart_resync_actor.h>
 #include <cloud/storage/core/libs/common/compressed_bitmap.h>
 
 #include <contrib/ydb/library/actors/core/actor_bootstrapped.h>
@@ -27,15 +27,22 @@
 
 namespace NCloud::NBlockStore::NStorage {
 
+struct TSplitRequest
+{
+    std::unique_ptr<TEvService::TEvWriteBlocksRequest> Request;
+    NActors::TActorId RecipientActorId;
+};
+
 class TIncompleteMirrorRWModeControllerActor final
     : public NActors::TActorBootstrapped<TIncompleteMirrorRWModeControllerActor>
+    , public ISmartResyncDelegate
 {
 private:
     const TStorageConfigPtr Config;
     const TNonreplicatedPartitionConfigPtr PartConfig;
     const IProfileLogPtr ProfileLog;
     const IBlockDigestGeneratorPtr BlockDigestGenerator;
-    const TString RwClientId;
+    TString RwClientId;
     const NActors::TActorId PartNonreplActorId;
     const NActors::TActorId StatActorId;
     const NActors::TActorId MirrorPartitionActor;
@@ -53,9 +60,6 @@ private:
         std::shared_ptr<TCompressedBitmap> CleanBlocksMap;
     };
     THashMap<TString, TAgentState> AgentState;
-
-    // ?
-    TDynBitMap DirtyBlockMap;
 
 public:
     TIncompleteMirrorRWModeControllerActor(
@@ -80,6 +84,10 @@ private:
         TBlockRange64 rangeToWrite,
         TBlockRange64 rangeToDelete,
         const TString& unavailableAgentId);
+    void TrimRequest2(
+        TEvService::TEvWriteBlocksRequest& ev,
+        TBlockRange64 rangeToWrite,
+        TBlockRange64 rangeToDelete);
     void TrimRequest(
         const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
         TBlockRange64 rangeToWrite,
@@ -91,9 +99,30 @@ private:
         TBlockRange64 rangeToDelete,
         const TString& unavailableAgentId);
 
+    TVector<TSplitRequest> SplitRequest(
+        const TEvService::TEvWriteBlocksRequest::TPtr& ev,
+        const TBlockRange64& blockRange);
+    bool ShouldSplitWriteRequest(const TVector<TDeviceRequest>& requests) const;
+    NActors::TActorId GetRecipientActorId(const TString& agentId) const;
+
     void MarkBlocksAsDirty(
         const TString& unavailableAgentId,
         TBlockRange64 range);
+
+
+    void SendPrepaerdRequest(
+        const NActors::TActorContext& ctx,
+        const TEvService::TEvWriteBlocksRequest::TPtr& originalEvent,
+        std::unique_ptr<TEvService::TEvWriteBlocksRequest> request,
+        const TString& agentId);
+
+    // ISmartResyncDelegate implementation:
+    void OnMigrationProgress(
+        const TString& agentId,
+        ui64 processedBlockCount,
+        ui64 blockCountNeedToBeProcessed) override;
+    void OnMigrationFinished(const TString& agentId) override;
+    void OnMigrationError(const TString& agentId) override;
 
 private:
     STFUNC(StateWork);
@@ -116,13 +145,17 @@ private:
             TPtr& ev,
         const NActors::TActorContext& ctx);
 
+    void HandleRWClientIdChanged(
+        const TEvVolume::TEvRWClientIdChanged::TPtr& ev,
+        const NActors::TActorContext& ctx);
+
     void HandlePoisonPill(
         const NActors::TEvents::TEvPoisonPill::TPtr& ev,
         const NActors::TActorContext& ctx);
 
-    // void HandlePoisonTaken(
-    //     const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
-    //     const NActors::TActorContext& ctx);
+    void HandlePoisonTaken(
+        const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
+        const NActors::TActorContext& ctx);
 
     template <typename TMethod>
     void WriteRequest(
@@ -130,7 +163,7 @@ private:
         const NActors::TActorContext& ctx);
 
     template <typename TMethod>
-    void ReadBlocks(
+    void WriteRequest2(
         const typename TMethod::TRequest::TPtr& ev,
         const NActors::TActorContext& ctx);
 

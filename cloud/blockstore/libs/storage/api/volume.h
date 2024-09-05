@@ -118,6 +118,36 @@ struct TEvVolume
     };
 
     //
+    // UpdateSmartResyncState
+    //
+
+    struct TUpdateSmartResyncState
+    {
+        ui64 ProcessedBlockCount;
+        ui64 BlockCountNeedToBeProcessed;
+
+        TUpdateSmartResyncState(
+                ui64 processedBlockCount,
+                ui64 blockCountNeedToBeProcessed)
+            : ProcessedBlockCount(processedBlockCount)
+            , BlockCountNeedToBeProcessed(blockCountNeedToBeProcessed)
+        {}
+    };
+
+    //
+    // SmartResyncFinished
+    //
+
+    struct TSmartResyncFinished
+    {
+        const TString AgentId;
+
+        explicit TSmartResyncFinished(TString agentId)
+            : AgentId(std::move(agentId))
+        {}
+    };
+
+    //
     // RWClientIdChanged
     //
 
@@ -354,6 +384,9 @@ struct TEvVolume
         EvDeviceTimeoutedRequest = EvBegin + 60,
         EvDeviceTimeoutedResponse = EvBegin + 61,
 
+        EvUpdateSmartResyncState = EvBegin + 62,
+        EvSmartResyncFinished = EvBegin + 63,
+
         EvEnd
     };
 
@@ -375,6 +408,16 @@ struct TEvVolume
     using TEvMigrationStateUpdated = TRequestEvent<
         TMigrationStateUpdated,
         EvMigrationStateUpdated
+    >;
+
+    using TEvUpdateSmartResyncState = TRequestEvent<
+        TUpdateSmartResyncState,
+        EvUpdateSmartResyncState
+    >;
+
+    using TEvSmartResyncFinished = TRequestEvent<
+        TSmartResyncFinished,
+        EvSmartResyncFinished
     >;
 
     using TEvRWClientIdChanged = TRequestEvent<

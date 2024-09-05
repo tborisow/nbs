@@ -119,19 +119,48 @@ void TSmartResyncActor::OnMigrationProgress(
     ui64 migrationIndex)
 {
     Y_UNUSED(migrationIndex);
-    Delegate->OnMigrationProgress(ctx, GetProcessedBlockCount(), GetBlockCountNeedToBeProcessed());
+
+    // Straight to volume mb?
+    ctx.Send(
+        PartConfig->GetParentActorId(),
+        std::make_unique<TEvVolume::TEvUpdateSmartResyncState>(
+            GetProcessedBlockCount(),
+            GetBlockCountNeedToBeProcessed()));
+
+    // ctx.Send(std::make_unique<IEventHandle>(
+    //     ParentActor,
+    //     ev->Sender,
+    //     request.release(),
+    //     ev->Flags,
+    //     ev->Cookie,
+    //     &ev->Sender));
+
+    // Delegate->OnMigrationProgress(
+    //     AgentId,
+    //     GetProcessedBlockCount(),
+    //     GetBlockCountNeedToBeProcessed());
 }
 
 void TSmartResyncActor::OnMigrationFinished(const NActors::TActorContext& ctx)
 {
-    Delegate->OnMigrationFinished(ctx);
+    Y_UNUSED(ctx);
 
-    // NCloud::Send<NPartition::TEvPartition::TEvSelectiveMigrationFinished>(ctx, PartNonreplActorId, 0, "");
+    // Straight to volume mb?
+    ctx.Send(
+        PartConfig->GetParentActorId(),
+        std::make_unique<TEvVolume::TEvSmartResyncFinished>(AgentId));
+
+    // Delegate->OnMigrationFinished(AgentId);
 }
 
 void TSmartResyncActor::OnMigrationError(const NActors::TActorContext& ctx)
 {
-    Delegate->OnMigrationError(ctx);
+    Y_UNUSED(ctx);
+
+    // Abort this and start real resync?
+
+
+    // Delegate->OnMigrationError(AgentId);
 }
 
 }   // namespace NCloud::NBlockStore::NStorage

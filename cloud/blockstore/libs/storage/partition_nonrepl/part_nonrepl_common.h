@@ -108,7 +108,8 @@ public:
         ++CurrentDeviceIdx;
     }
 
-    void BuildNextRequest(NProto::TWriteDeviceBlocksRequest& r)
+    template <typename TRequest>
+    void BuildNextRequest(TRequest& r)
     {
         Y_ABORT_UNLESS(CurrentDeviceIdx < DeviceRequests.size());
 
