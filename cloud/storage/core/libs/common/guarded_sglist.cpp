@@ -244,7 +244,7 @@ bool TGuardedSgList::Empty() const
     return Sglist.empty();
 }
 
-TGuardedSgList TGuardedSgList::CreateDepender() const
+[[nodiscard]] TGuardedSgList TGuardedSgList::CreateDepender() const
 {
     Y_ABORT_UNLESS(GuardedObject);
     return TGuardedSgList(
@@ -252,7 +252,16 @@ TGuardedSgList TGuardedSgList::CreateDepender() const
         Sglist);
 }
 
-TGuardedSgList TGuardedSgList::Create(TSgList sglist) const
+[[nodiscard]] TGuardedSgList TGuardedSgList::CreateDepender(
+    TSgList sglist) const
+{
+    Y_ABORT_UNLESS(GuardedObject);
+    return TGuardedSgList(
+        MakeIntrusive<TDependentGuardedObject>(GuardedObject),
+        std::move(sglist));
+}
+
+[[nodiscard]] TGuardedSgList TGuardedSgList::Create(TSgList sglist) const
 {
     Y_ABORT_UNLESS(GuardedObject);
     return TGuardedSgList(GuardedObject, std::move(sglist));
@@ -264,7 +273,7 @@ void TGuardedSgList::SetSgList(TSgList sglist)
     Sglist = std::move(sglist);
 }
 
-TGuardedSgList::TGuard TGuardedSgList::Acquire() const
+[[nodiscard]] TGuardedSgList::TGuard TGuardedSgList::Acquire() const
 {
     Y_ABORT_UNLESS(GuardedObject);
     return TGuard(GuardedObject, Sglist);

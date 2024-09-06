@@ -29,7 +29,8 @@ namespace NCloud::NBlockStore::NStorage {
 
 struct TSplitRequest
 {
-    std::unique_ptr<TEvService::TEvWriteBlocksRequest> Request;
+    std::unique_ptr<NActors::IEventBase> Request;
+    TCallContextPtr CallContext;
     NActors::TActorId RecipientActorId;
 };
 
@@ -79,29 +80,21 @@ public:
 private:
     [[nodiscard]] bool AgentIsUnavailable(const TString& agentId) const;
 
-    void TrimRequest(
-        const TEvService::TEvWriteBlocksRequest::TPtr& ev,
-        TBlockRange64 rangeToWrite,
-        TBlockRange64 rangeToDelete,
-        const TString& unavailableAgentId);
-    void TrimRequest2(
-        TEvService::TEvWriteBlocksRequest& ev,
-        TBlockRange64 rangeToWrite,
-        TBlockRange64 rangeToDelete);
-    void TrimRequest(
-        const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
-        TBlockRange64 rangeToWrite,
-        TBlockRange64 rangeToDelete,
-        const TString& unavailableAgentId);
-    void TrimRequest(
-        const TEvService::TEvZeroBlocksRequest::TPtr& ev,
-        TBlockRange64 rangeToWrite,
-        TBlockRange64 rangeToDelete,
-        const TString& unavailableAgentId);
-
+    template <typename TMethod>
     TVector<TSplitRequest> SplitRequest(
+        const TMethod::TRequest::TPtr& ev,
+        const TVector<TDeviceRequest>& deviceRequests);
+
+    TVector<TSplitRequest> DoSplitRequest(
         const TEvService::TEvWriteBlocksRequest::TPtr& ev,
-        const TBlockRange64& blockRange);
+        const TVector<TDeviceRequest>& deviceRequests);
+    TVector<TSplitRequest> DoSplitRequest(
+        const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
+        const TVector<TDeviceRequest>& deviceRequests);
+    TVector<TSplitRequest> DoSplitRequest(
+        const TEvService::TEvZeroBlocksRequest::TPtr& ev,
+        const TVector<TDeviceRequest>& deviceRequests);
+
     bool ShouldSplitWriteRequest(const TVector<TDeviceRequest>& requests) const;
     NActors::TActorId GetRecipientActorId(const TString& agentId) const;
 
@@ -123,6 +116,7 @@ private:
         ui64 blockCountNeedToBeProcessed) override;
     void OnMigrationFinished(const TString& agentId) override;
     void OnMigrationError(const TString& agentId) override;
+
 
 private:
     STFUNC(StateWork);
