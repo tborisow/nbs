@@ -868,6 +868,7 @@ void TShadowDiskActor::CreateShadowDiskPartitionActor(
             ctx,
             SrcActorId,
             DstActorId,
+            /*takeOwnershipOverActors=*/true,
             std::make_unique<TMigrationTimeoutCalculator>(
                 Config->GetMaxShadowDiskFillBandwidth(),
                 Config->GetExpectedDiskAgentSize(),

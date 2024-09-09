@@ -40,6 +40,7 @@ private:
         TDuration TimedOutStateDuration;
         TDuration CurrentTimeout;
         TDuration ExpectedClientBackoff;
+        bool DeviceIsUnavailable = false;
 
         TSimpleRingBuffer<TDuration> ResponseTimes{10};
     };
@@ -134,6 +135,14 @@ private:
 
     void HandleChecksumBlocksCompleted(
         const TEvNonreplPartitionPrivate::TEvChecksumBlocksCompleted::TPtr& ev,
+        const NActors::TActorContext& ctx);
+
+    void HandleAgentIsUnavailable(
+        const NPartition::TEvPartition::TEvAgentIsUnavailable::TPtr& ev,
+        const NActors::TActorContext& ctx);
+
+    void HandleAgentIsBackOnline(
+        const NPartition::TEvPartition::TEvAgentIsBackOnline::TPtr& ev,
         const NActors::TActorContext& ctx);
 
     bool HandleRequests(STFUNC_SIG);

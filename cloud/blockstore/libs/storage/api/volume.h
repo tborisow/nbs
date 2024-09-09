@@ -123,13 +123,16 @@ struct TEvVolume
 
     struct TUpdateSmartResyncState
     {
+        TString AgentId;
         ui64 ProcessedBlockCount;
         ui64 BlockCountNeedToBeProcessed;
 
         TUpdateSmartResyncState(
+                TString agentId,
                 ui64 processedBlockCount,
                 ui64 blockCountNeedToBeProcessed)
-            : ProcessedBlockCount(processedBlockCount)
+            : AgentId(std::move(agentId))
+            , ProcessedBlockCount(processedBlockCount)
             , BlockCountNeedToBeProcessed(blockCountNeedToBeProcessed)
         {}
     };

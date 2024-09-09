@@ -1036,6 +1036,20 @@ void TVolumeActor::CompleteUpdateIncompleteMirrorIOMode(
     // Set timeout here, in case DR will not notify us about missing replica?
 }
 
+void TVolumeActor::HandleDeviceTimeouted(
+    const TEvVolume::TEvSmartResyncFinished::TPtr& ev,
+    const TActorContext& ctx)
+ {
+    // TODO: STUFF
+
+     const auto* msg = ev->Get();
+     const auto& partActorId = State->GetDiskRegistryBasedPartitionActor();
+     NCloud::Send(
+         ctx,
+         partActorId,
+         std::make_unique<TEvVolume::TEvSmartResyncFinished>(msg->AgentId));
+ }
+
 bool TVolumeActor::HandleRequests(STFUNC_SIG)
 {
     switch (ev->GetTypeRewrite()) {
@@ -1245,6 +1259,8 @@ STFUNC(TVolumeActor::StateWork)
         HFunc(TEvVolume::TEvResyncFinished, HandleResyncFinished);
 
         HFunc(TEvVolume::TEvDeviceTimeoutedRequest, HandleDeviceTimeouted);
+        HFunc(TEvVolume::TEvSmartResyncFinished, HandleSmartResyncFinished);
+
 
         HFunc(
             TEvPartitionCommonPrivate::TEvLongRunningOperation,

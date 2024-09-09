@@ -65,8 +65,9 @@ void TSmartResyncActor::OnBootstrap(const TActorContext& ctx)
 {
     InitWork(
         ctx,
-        PartNonreplActorId,
         MirrorPartitionActor,
+        PartNonreplActorId,
+        /*takeOwnershipOverActors=*/false,
         std::make_unique<TMigrationTimeoutCalculator>(
             Config->GetMaxMigrationBandwidth(),
             Config->GetExpectedDiskAgentSize(),
@@ -120,10 +121,11 @@ void TSmartResyncActor::OnMigrationProgress(
 {
     Y_UNUSED(migrationIndex);
 
-    // Straight to volume mb?
+    // Straight to volume!
     ctx.Send(
         PartConfig->GetParentActorId(),
         std::make_unique<TEvVolume::TEvUpdateSmartResyncState>(
+            AgentId,
             GetProcessedBlockCount(),
             GetBlockCountNeedToBeProcessed()));
 

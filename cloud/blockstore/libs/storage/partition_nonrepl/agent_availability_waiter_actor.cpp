@@ -110,10 +110,10 @@ void TAgentAvailabilityWaiterActor::HandleReadBlocksResponse(
 }
 
 void TAgentAvailabilityWaiterActor::HandlePoisonPill(
-    const NActors::TEvents::TEvPoisonPill::TPtr& ev,
-    const NActors::TActorContext& ctx)
+    const TEvents::TEvPoisonPill::TPtr& ev,
+    const TActorContext& ctx)
 {
-    Y_UNUSED(ev);
+    NCloud::Reply(ctx, *ev, std::make_unique<TEvents::TEvPoisonTaken>());
     Die(ctx);
 }
 

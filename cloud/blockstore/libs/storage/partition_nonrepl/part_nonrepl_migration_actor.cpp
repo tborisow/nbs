@@ -50,6 +50,7 @@ void TNonreplicatedPartitionMigrationActor::OnBootstrap(
         ctx,
         CreateSrcActor(ctx),
         CreateDstActor(ctx),
+        /*takeOwnershipOverActors=*/true,
         std::make_unique<TMigrationTimeoutCalculator>(
             Config->GetMaxMigrationBandwidth(),
             Config->GetExpectedDiskAgentSize(),

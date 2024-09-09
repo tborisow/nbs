@@ -37,8 +37,12 @@ struct TSplitRequest
 class TIncompleteMirrorRWModeControllerActor final
     : public NActors::TActorBootstrapped<TIncompleteMirrorRWModeControllerActor>
     , public ISmartResyncDelegate
+    , public IPoisonPillHelperOwner
 {
 private:
+    using TBase =
+        NActors::TActorBootstrapped<TIncompleteMirrorRWModeControllerActor>;
+
     const TStorageConfigPtr Config;
     const TNonreplicatedPartitionConfigPtr PartConfig;
     const IProfileLogPtr ProfileLog;
@@ -61,6 +65,8 @@ private:
         std::shared_ptr<TCompressedBitmap> CleanBlocksMap;
     };
     THashMap<TString, TAgentState> AgentState;
+
+    TPoisonPillHelper PoisonPillHelper;
 
 public:
     TIncompleteMirrorRWModeControllerActor(
@@ -110,6 +116,8 @@ private:
     void OnMigrationFinished(const TString& agentId) override;
     void OnMigrationError(const TString& agentId) override;
 
+    // IPoisonPillHelperOwner implementation:
+    void Die(const NActors::TActorContext& ctx) override;
 
 private:
     STFUNC(StateWork);
@@ -140,17 +148,8 @@ private:
         const NActors::TEvents::TEvPoisonPill::TPtr& ev,
         const NActors::TActorContext& ctx);
 
-    void HandlePoisonTaken(
-        const NActors::TEvents::TEvPoisonTaken::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
     template <typename TMethod>
     void WriteRequest(
-        const typename TMethod::TRequest::TPtr& ev,
-        const NActors::TActorContext& ctx);
-
-    template <typename TMethod>
-    void WriteRequest2(
         const typename TMethod::TRequest::TPtr& ev,
         const NActors::TActorContext& ctx);
 

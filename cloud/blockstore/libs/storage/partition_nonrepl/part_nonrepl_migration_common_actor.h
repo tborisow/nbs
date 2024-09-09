@@ -178,6 +178,7 @@ public:
         const NActors::TActorContext& ctx,
         NActors::TActorId srcActorId,
         NActors::TActorId dstActorId,
+        bool takeOwnershipOverActors,
         std::unique_ptr<TMigrationTimeoutCalculator> timeoutCalculator);
 
     // Called from the inheritor to start migration.

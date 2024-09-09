@@ -18,7 +18,6 @@ namespace NCloud::NBlockStore::NStorage {
 namespace {
 
 using namespace NActors;
-
 using namespace NKikimr;
 
 template <typename TEvent>
@@ -150,6 +149,7 @@ void TSplitRequestSenderActor<TMethod>::Done(const NActors::TActorContext& ctx)
         callContext.LWOrbit.Join(request.CallContext->LWOrbit);
     }
 
+    // TODO: TRACING?
     // LWTRACK(
     //     ResponseSent_PartitionWorker,
     //     RequestInfo->CallContext->LWOrbit,
@@ -160,7 +160,6 @@ void TSplitRequestSenderActor<TMethod>::Done(const NActors::TActorContext& ctx)
     NCloud::Reply(ctx, *RequestInfo, std::move(response));
 
     // TODO: NOT NEEDED, right?
-
     // using TCompletion =
     //     TEvNonreplPartitionPrivate::TEvWriteOrZeroCompleted;
     // auto completion =
@@ -203,6 +202,7 @@ void TSplitRequestSenderActor<TMethod>::HandleUndelivery(
 {
     Y_UNUSED(ev);
 
+    // TODO: FIX log
     LOG_WARN(ctx, TBlockStoreComponents::PARTITION_WORKER,
         "[%s] %s request undelivered to some nonrepl partitions",
         DiskId.c_str(),
@@ -226,6 +226,7 @@ void TSplitRequestSenderActor<TMethod>::HandleResponse(
     auto* msg = ev->Get();
 
     if (HasError(msg->Record)) {
+        // TODO: FIX log
         LOG_ERROR(ctx, TBlockStoreComponents::PARTITION_WORKER,
             "[%s] %s got error from nonreplicated partition: %s",
             DiskId.c_str(),
@@ -296,14 +297,16 @@ TIncompleteMirrorRWModeControllerActor::TIncompleteMirrorRWModeControllerActor(
     , PartNonreplActorId(partNonreplActorId)
     , StatActorId(statActorId)
     , MirrorPartitionActor(mirrorPartitionActor)
-{}
+    , PoisonPillHelper(this)
+{
+}
 
 TIncompleteMirrorRWModeControllerActor::
     ~TIncompleteMirrorRWModeControllerActor() = default;
 
 void TIncompleteMirrorRWModeControllerActor::Bootstrap(const TActorContext& ctx)
 {
-    Y_UNUSED(ctx);
+    PoisonPillHelper.TakeOwnership(ctx, PartNonreplActorId);
     Become(&TThis::StateWork);
 }
 
@@ -335,45 +338,45 @@ bool TIncompleteMirrorRWModeControllerActor::ShouldSplitWriteRequest(
     return states.size() != 1;
 }
 
-void TIncompleteMirrorRWModeControllerActor::OnMigrationProgress(
-    const TString& agentId,
-    ui64 processedBlockCount,
-    ui64 blockCountNeedToBeProcessed)
-{
-    Y_DEBUG_ABORT_UNLESS(AgentState.contains(agentId));
-    auto& state = AgentState[agentId];
-    Y_DEBUG_ABORT_UNLESS(state.SmartResyncActor);
+// void TIncompleteMirrorRWModeControllerActor::OnMigrationProgress(
+//     const TString& agentId,
+//     ui64 processedBlockCount,
+//     ui64 blockCountNeedToBeProcessed)
+// {
+//     Y_DEBUG_ABORT_UNLESS(AgentState.contains(agentId));
+//     auto& state = AgentState[agentId];
+//     Y_DEBUG_ABORT_UNLESS(state.SmartResyncActor);
 
-    NCloud::Send(
-        ActorContext(),
-        PartConfig->GetParentActorId(),
-        std::make_unique<TEvVolume::TEvUpdateSmartResyncState>(
-            processedBlockCount,
-            blockCountNeedToBeProcessed));
-}
+//     NCloud::Send(
+//         ActorContext(),
+//         PartConfig->GetParentActorId(),
+//         std::make_unique<TEvVolume::TEvUpdateSmartResyncState>(
+//             processedBlockCount,
+//             blockCountNeedToBeProcessed));
+// }
 
-void TIncompleteMirrorRWModeControllerActor::OnMigrationFinished(
-    const TString& agentId)
-{
-    Y_DEBUG_ABORT_UNLESS(AgentState.contains(agentId));
-    auto& state = AgentState[agentId];
-    Y_DEBUG_ABORT_UNLESS(state.SmartResyncActor);
+// void TIncompleteMirrorRWModeControllerActor::OnMigrationFinished(
+//     const TString& agentId)
+// {
+//     Y_DEBUG_ABORT_UNLESS(AgentState.contains(agentId));
+//     auto& state = AgentState[agentId];
+//     Y_DEBUG_ABORT_UNLESS(state.SmartResyncActor);
 
-    NCloud::Send(
-        ActorContext(),
-        PartConfig->GetParentActorId(),
-        std::make_unique<TEvVolume::TEvSmartResyncFinished>(agentId));
-}
+//     NCloud::Send(
+//         ActorContext(),
+//         PartConfig->GetParentActorId(),
+//         std::make_unique<TEvVolume::TEvSmartResyncFinished>(agentId));
+// }
 
-void TIncompleteMirrorRWModeControllerActor::OnMigrationError(
-    const TString& agentId)
-{
-    Y_DEBUG_ABORT_UNLESS(AgentState.contains(agentId));
-    auto& state = AgentState[agentId];
-    Y_DEBUG_ABORT_UNLESS(state.SmartResyncActor);
+// void TIncompleteMirrorRWModeControllerActor::OnMigrationError(
+//     const TString& agentId)
+// {
+//     Y_DEBUG_ABORT_UNLESS(AgentState.contains(agentId));
+//     auto& state = AgentState[agentId];
+//     Y_DEBUG_ABORT_UNLESS(state.SmartResyncActor);
 
-    // TODO: Abort this and start real resync?
-}
+//     // TODO: Abort this and start real resync?
+// }
 
 void TIncompleteMirrorRWModeControllerActor::HandleAgentIsUnavailable(
     const NPartition::TEvPartition::TEvAgentIsUnavailable::TPtr& ev,
@@ -383,7 +386,9 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsUnavailable(
 
     TAgentState* state = AgentState.FindPtr(msg->AgentId);
     if (!state || state->State == EAgentState::Resyncing) {
-        auto waiterActorId = NCloud::Register(
+        auto& state = AgentState[msg->AgentId];
+        state.State = EAgentState::Unavailable;
+        state.AgentAvailabilityWaiter = NCloud::Register(
             ctx,
             std::make_unique<TAgentAvailabilityWaiterActor>(
                 Config,
@@ -392,21 +397,30 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsUnavailable(
                 SelfId(),
                 StatActorId,
                 msg->AgentId));
-        auto& state = AgentState[msg->AgentId];
-        state.State = EAgentState::Unavailable;
-        state.AgentAvailabilityWaiter = waiterActorId;
-        state.CleanBlocksMap =
-            std::make_shared<TCompressedBitmap>(PartConfig->GetBlockCount());
-        state.CleanBlocksMap->Set(0, PartConfig->GetBlockCount());
+        PoisonPillHelper.TakeOwnership(ctx, state.AgentAvailabilityWaiter);
 
         if (state.SmartResyncActor) {
+            Y_DEBUG_ABORT_UNLESS(state.CleanBlocksMap);
+
+            PoisonPillHelper.ReleaseOwnership(ctx, state.SmartResyncActor);
+            // TODO: Either add a lock to sturcture, or handle poisontaken event.
             NCloud::Send<TEvents::TEvPoisonPill>(ctx, state.SmartResyncActor);
             state.SmartResyncActor = TActorId();
+        } else {
+            state.CleanBlocksMap =
+                std::make_shared<TCompressedBitmap>(PartConfig->GetBlockCount());
+            state.CleanBlocksMap->Set(0, PartConfig->GetBlockCount());
         }
     } else {
         Y_DEBUG_ABORT_UNLESS(AgentState[msg->AgentId].AgentAvailabilityWaiter);
         Y_DEBUG_ABORT_UNLESS(!AgentState[msg->AgentId].SmartResyncActor);
     }
+
+    NCloud::Send(
+        ctx,
+        PartNonreplActorId,
+        std::make_unique<NPartition::TEvPartition::TEvAgentIsUnavailable>(
+            msg->AgentId));
 }
 
 void TIncompleteMirrorRWModeControllerActor::HandleAgentIsBackOnline(
@@ -426,6 +440,9 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsBackOnline(
             Y_DEBUG_ABORT_UNLESS(!state.SmartResyncActor);
             Y_DEBUG_ABORT_UNLESS(state.AgentAvailabilityWaiter);
 
+            PoisonPillHelper.ReleaseOwnership(
+                ctx,
+                state.AgentAvailabilityWaiter);
             NCloud::Send<TEvents::TEvPoisonPill>(
                 ctx,
                 state.AgentAvailabilityWaiter);
@@ -446,6 +463,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsBackOnline(
                     SelfId(),
                     state.CleanBlocksMap,
                     msg->AgentId));
+            PoisonPillHelper.TakeOwnership(ctx, state.SmartResyncActor);
             state.State = EAgentState::Resyncing;
             break;
         }
@@ -457,6 +475,12 @@ void TIncompleteMirrorRWModeControllerActor::HandleAgentIsBackOnline(
             break;
         }
     }
+
+    NCloud::Send(
+        ctx,
+        PartNonreplActorId,
+        std::make_unique<NPartition::TEvPartition::TEvAgentIsBackOnline>(
+            msg->AgentId));
 }
 
 bool TIncompleteMirrorRWModeControllerActor::AgentIsUnavailable(
@@ -477,7 +501,7 @@ void TIncompleteMirrorRWModeControllerActor::MarkBlocksAsDirty(
 }
 
 template <typename TMethod>
-void TIncompleteMirrorRWModeControllerActor::WriteRequest2(
+void TIncompleteMirrorRWModeControllerActor::WriteRequest(
     const typename TMethod::TRequest::TPtr& ev,
     const TActorContext& ctx)
 {
@@ -650,7 +674,7 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocks(
     const TEvService::TEvWriteBlocksRequest::TPtr& ev,
     const TActorContext& ctx)
 {
-    WriteRequest2<TEvService::TWriteBlocksMethod>(ev, ctx);
+    WriteRequest<TEvService::TWriteBlocksMethod>(ev, ctx);
     auto request = std::make_unique<TEvService::TWriteBlocksMethod::TRequest>();
 }
 
@@ -658,14 +682,14 @@ void TIncompleteMirrorRWModeControllerActor::HandleWriteBlocksLocal(
     const TEvService::TEvWriteBlocksLocalRequest::TPtr& ev,
     const TActorContext& ctx)
 {
-    WriteRequest2<TEvService::TWriteBlocksLocalMethod>(ev, ctx);
+    WriteRequest<TEvService::TWriteBlocksLocalMethod>(ev, ctx);
 }
 
 void TIncompleteMirrorRWModeControllerActor::HandleZeroBlocks(
     const TEvService::TEvZeroBlocksRequest::TPtr& ev,
     const TActorContext& ctx)
 {
-    WriteRequest2<TEvService::TZeroBlocksMethod>(ev, ctx);
+    WriteRequest<TEvService::TZeroBlocksMethod>(ev, ctx);
 }
 
 void TIncompleteMirrorRWModeControllerActor::HandleRWClientIdChanged(
@@ -719,35 +743,15 @@ void TIncompleteMirrorRWModeControllerActor::HandlePoisonPill(
     const TEvents::TEvPoisonPill::TPtr& ev,
     const TActorContext& ctx)
 {
-    Y_UNUSED(ev);
-
     Become(&TThis::StateZombie);
-    NCloud::Send<TEvents::TEvPoisonPill>(ctx, PartNonreplActorId);
-    for (const auto& state: AgentState) {
-        if (state.second.AgentAvailabilityWaiter) {
-            NCloud::Send<TEvents::TEvPoisonPill>(
-                ctx,
-                state.second.AgentAvailabilityWaiter);
-        }
-        if (state.second.SmartResyncActor) {
-            NCloud::Send<TEvents::TEvPoisonPill>(
-                ctx,
-                state.second.SmartResyncActor);
-        }
-    }
+    PoisonPillHelper.HandlePoisonPill(ev, ctx);
     AgentState.clear();
 }
 
-void TIncompleteMirrorRWModeControllerActor::HandlePoisonTaken(
-    const TEvents::TEvPoisonTaken::TPtr& ev,
-    const TActorContext& ctx)
+void TIncompleteMirrorRWModeControllerActor::Die(
+    const NActors::TActorContext& ctx)
 {
-    if (ev->Sender != PartNonreplActorId) {
-        return;
-    }
-
-    NCloud::Send<TEvents::TEvPoisonTaken>(ctx, MirrorPartitionActor);
-    Die(ctx);
+    TBase::Die(ctx);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -844,7 +848,7 @@ STFUNC(TIncompleteMirrorRWModeControllerActor::StateZombie)
 
         IgnoreFunc(TEvVolume::TEvRWClientIdChanged);
         IgnoreFunc(TEvents::TEvPoisonPill);
-        HFunc(TEvents::TEvPoisonTaken, HandlePoisonTaken);
+        HFunc(TEvents::TEvPoisonTaken, PoisonPillHelper.HandlePoisonTaken);
 
         default:
             ForwardUnexpectedEvent(ev, ActorContext());

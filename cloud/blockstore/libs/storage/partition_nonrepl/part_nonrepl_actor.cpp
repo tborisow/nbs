@@ -205,7 +205,9 @@ bool TNonreplicatedPartitionActor::InitRequests(
         }
 
         request->DeviceIndices.push_back(dr.DeviceIdx);
-        if (deviceStat.CurrentTimeout > request->Timeout) {
+        if (deviceStat.CurrentTimeout > request->Timeout &&
+            !deviceStat.DeviceIsUnavailable)
+        {
             request->Timeout = deviceStat.CurrentTimeout;
         }
     }
@@ -342,31 +344,51 @@ void TNonreplicatedPartitionActor::HandleWakeup(
                 << ", CurrentTimeout=" << deviceStat.CurrentTimeout
                 << ", LastTimeoutTs=" << deviceStat.LastTimeoutTs);
 
-            if (deviceStat.TimedOutStateDuration > TDuration::Seconds(3)) {
+            if (deviceStat.TimedOutStateDuration > TDuration::Seconds(3) &&
+                !deviceStat.DeviceIsUnavailable)
+            {
                 auto request =
                     std::make_unique<TEvVolume::TEvDeviceTimeoutedRequest>(
                         i,
                         PartConfig->GetDevices()[i].GetDeviceUUID());
-                // request->Record.SetDeviceUUID(
-                //     PartConfig->GetDevices()[i].GetDeviceUUID());
-                // request->Record.SetDeviceIndex(i);
-                // ctx.Send(PartConfig->GetParentActorId(), request.release());
-
                 NCloud::Send(
                     ctx,
                     PartConfig->GetParentActorId(),
                     std::move(request));
-
-                // NCloud::Send<TEvVolume::TEvDeviceTimeoutedRequest>(
-                //     ctx,
-                //     PartConfig->GetParentActorId(),
-                //     i,
-                //     PartConfig->GetDevices()[i].GetDeviceUUID());
             }
         }
     }
 
     ctx.Schedule(GetMinRequestTimeout(), new TEvents::TEvWakeup());
+}
+
+void TNonreplicatedPartitionActor::HandleAgentIsUnavailable(
+    const NPartition::TEvPartition::TEvAgentIsUnavailable::TPtr& ev,
+    const TActorContext& ctx)
+{
+
+    Y_UNUSED(ctx);
+    const auto* msg = ev->Get();
+
+    for (int i = 0; i < PartConfig->GetDevices().size(); ++i) {
+        if (PartConfig->GetDevices().at(i).GetAgentId() == msg->AgentId) {
+            DeviceStats[i].DeviceIsUnavailable = true;
+        }
+    }
+}
+
+void TNonreplicatedPartitionActor::HandleAgentIsBackOnline(
+    const NPartition::TEvPartition::TEvAgentIsBackOnline::TPtr& ev,
+    const TActorContext& ctx)
+{
+    Y_UNUSED(ctx);
+    const auto* msg = ev->Get();
+
+    for (int i = 0; i < PartConfig->GetDevices().size(); ++i) {
+        if (PartConfig->GetDevices().at(i).GetAgentId() == msg->AgentId) {
+            DeviceStats[i].DeviceIsUnavailable = false;
+        }
+    }
 }
 
 void TNonreplicatedPartitionActor::ReplyAndDie(const NActors::TActorContext& ctx)
@@ -454,6 +476,10 @@ STFUNC(TNonreplicatedPartitionActor::StateWork)
         HFunc(TEvService::TEvWriteBlocksLocalRequest, HandleWriteBlocksLocal);
 
         HFunc(NPartition::TEvPartition::TEvDrainRequest, DrainActorCompanion.HandleDrain);
+
+        HFunc(NPartition::TEvPartition::TEvAgentIsUnavailable, HandleAgentIsUnavailable);
+        HFunc(NPartition::TEvPartition::TEvAgentIsBackOnline, HandleAgentIsBackOnline);
+
         HFunc(
             TEvService::TEvGetChangedBlocksRequest,
             GetChangedBlocksCompanion.HandleGetChangedBlocks);
