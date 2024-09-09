@@ -102,13 +102,6 @@ private:
         const TString& unavailableAgentId,
         TBlockRange64 range);
 
-
-    void SendPrepaerdRequest(
-        const NActors::TActorContext& ctx,
-        const TEvService::TEvWriteBlocksRequest::TPtr& originalEvent,
-        std::unique_ptr<TEvService::TEvWriteBlocksRequest> request,
-        const TString& agentId);
-
     // ISmartResyncDelegate implementation:
     void OnMigrationProgress(
         const TString& agentId,
