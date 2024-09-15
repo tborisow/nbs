@@ -328,6 +328,9 @@ struct TTestBootstrap
     {
         NProto::TLocalServiceConfig config;
         config.SetRootPath(Cwd->GetName());
+        config.SetStatePath(Cwd->GetName());
+        config.SetMaxInodeCount(1000);
+        config.SetMaxHandlePerSessionCount(100);
 
         return std::make_shared<TLocalFileStoreConfig>(config);
     }
@@ -645,6 +648,7 @@ struct TTestBootstrap
         return request;
     }
 
+
     auto CreateFsyncDirRequest(ui64 node, bool dataSync)
     {
         auto request = CreateRequest<NProto::TFsyncDirRequest>();
@@ -664,6 +668,15 @@ struct TTestBootstrap
         UNIT_ASSERT_C(                                                             \
             SUCCEEDED(response.GetError().GetCode()),                              \
             response.GetError().GetMessage() + "@" + dbg);                         \
+        return response;                                                           \
+    }                                                                              \
+                                                                                   \
+    template <typename... Args>                                                    \
+    NProto::T##name##Response NoAssert##name(Args&&... args)                       \
+    {                                                                              \
+        auto request = Create##name##Request(std::forward<Args>(args)...);         \
+        auto dbg = request->ShortDebugString();                                    \
+        auto response = Store->name(Ctx, std::move(request)).GetValueSync();       \
         return response;                                                           \
     }                                                                              \
                                                                                    \
@@ -696,6 +709,55 @@ ui64 CreateFile(TTestBootstrap& bootstrap, ui64 parent, const TString& name, int
 ui64 CreateDirectory(TTestBootstrap& bootstrap, ui64 parent, const TString& name, int mode = 0)
 {
     return bootstrap.CreateNode(TCreateNodeArgs::Directory(parent, name, mode)).GetNode().GetId();
+}
+
+TVector<ui64> CreateDirectories(
+    TTestBootstrap& bootstrap,
+    ui64 parent,
+    const TString& path,
+    int mode = 0)
+{
+    TVector<ui64> nodes;
+
+    TFsPath fsPath(path);
+    for (auto& pathPart: fsPath.PathSplit()) {
+        auto request = bootstrap.CreateRequest<NProto::TGetNodeAttrRequest>();
+        auto rsp = bootstrap.NoAssertGetNodeAttr(parent, TString(pathPart));
+        if (STATUS_FROM_CODE(rsp.GetError().GetCode()) == NProto::E_FS_NOENT) {
+            auto nodeId =
+                bootstrap.CreateNode(TCreateNodeArgs::Directory(
+                        parent,
+                        TString(pathPart),
+                        mode)).GetNode().GetId();
+            parent = nodeId;
+            nodes.push_back(parent);
+            continue;
+        }
+
+        UNIT_ASSERT_C(
+            SUCCEEDED(rsp.GetError().GetCode()),
+            rsp.GetError().GetMessage() + "@" + request->ShortDebugString());
+
+        parent = rsp.GetNode().GetId();
+        nodes.push_back(parent);
+    }
+    return nodes;
+}
+
+void CheckDirectoryPath(
+    TTestBootstrap& bootstrap,
+    ui64 parent,
+    const TString& path,
+    TVector<ui64>& expectedNodes)
+{
+    TFsPath fsPath(path);
+    auto expectedNodeIndex = 0UL;
+    for (auto& pathPart: fsPath.PathSplit()) {
+        UNIT_ASSERT(expectedNodeIndex < expectedNodes.size());
+        auto stat = bootstrap.GetNodeAttr(parent, TString(pathPart)).GetNode();
+        UNIT_ASSERT_VALUES_EQUAL(stat.GetId(), expectedNodes[expectedNodeIndex++]);
+        parent = stat.GetId();
+    }
 }
 
 ui64 CreateHardLink(TTestBootstrap& bootstrap, ui64 parent, const TString& name, ui64 target)
@@ -831,6 +893,111 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
         UNIT_ASSERT_VALUES_EQUAL(store.GetCloudId(), "cloud");
         UNIT_ASSERT_VALUES_EQUAL(store.GetBlockSize(), 100500);
         UNIT_ASSERT_VALUES_EQUAL(store.GetBlocksCount(), 500100);
+    }
+
+    Y_UNIT_TEST(ShouldRecoverFsNodes)
+    {
+        TTestBootstrap bootstrap("fs", "client");
+        auto ctx = MakeIntrusive<TCallContext>();
+
+        auto dirPath1 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/d/e");
+        auto file1 = CreateFile(bootstrap, dirPath1.back(), "file1", 0755);
+        auto dirPath2 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/f/g");
+        auto file2 = CreateFile(bootstrap, dirPath2.back(), "file2", 0555);
+
+        TTestBootstrap other(bootstrap.Cwd);
+
+        auto id = other.CreateSession("fs", "client", "", false, 0, true)
+                      .GetSession()
+                      .GetSessionId();
+        other.Headers.SessionId = id;
+        UNIT_ASSERT_VALUES_EQUAL(bootstrap.Headers.SessionId, other.Headers.SessionId);
+
+
+        CheckDirectoryPath(other, RootNodeId, "a/b/c/d/e", dirPath1);
+
+        auto nodes = ListNames(other, dirPath1.back());
+        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 1);
+        UNIT_ASSERT_VALUES_EQUAL(nodes[0], "file1");
+
+        auto stat = bootstrap.GetNodeAttr(dirPath1.back(), "file1").GetNode();
+        UNIT_ASSERT_VALUES_EQUAL(file1, stat.GetId());
+
+
+        CheckDirectoryPath(other, RootNodeId, "a/b/c/f/g", dirPath2);
+
+        nodes = ListNames(other, dirPath2.back());
+        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 1);
+        UNIT_ASSERT_VALUES_EQUAL(nodes[0], "file2");
+
+        stat = bootstrap.GetNodeAttr(dirPath2.back(), "file2").GetNode();
+        UNIT_ASSERT_VALUES_EQUAL(file2, stat.GetId());
+    }
+
+    Y_UNIT_TEST(ShouldNotRecoverUnlinkedFsNodes)
+    {
+        TTestBootstrap bootstrap("fs", "client");
+        auto ctx = MakeIntrusive<TCallContext>();
+
+        auto dirPath1 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/d/e");
+        CreateFile(bootstrap, dirPath1.back(), "file1", 0755);
+        auto dirPath2 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/f/g");
+        CreateFile(bootstrap, dirPath2.back(), "file2", 0555);
+
+        // rm a/b/c/d/e/file1
+        bootstrap.UnlinkNode(dirPath1.back(), "file1", false);
+        // rm a/b/c/f/g/file2
+        bootstrap.UnlinkNode(dirPath2.back(), "file2", false);
+        // rmdir a/b/c/f/g
+        bootstrap.UnlinkNode(dirPath2[dirPath2.size()-2], "g", true);
+        dirPath2.pop_back();
+
+        TTestBootstrap other(bootstrap.Cwd);
+
+        auto id = other.CreateSession("fs", "client", "", false, 0, true)
+                      .GetSession()
+                      .GetSessionId();
+        other.Headers.SessionId = id;
+        UNIT_ASSERT_VALUES_EQUAL(
+            bootstrap.Headers.SessionId,
+            other.Headers.SessionId);
+
+        CheckDirectoryPath(other, RootNodeId, "a/b/c/d/e", dirPath1);
+        auto nodes = ListNames(other, dirPath1.back());
+        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 0);
+
+        CheckDirectoryPath(other, RootNodeId, "a/b/c/f", dirPath2);
+        nodes = ListNames(other, dirPath2.back());
+        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 0);
+    }
+
+    Y_UNIT_TEST(ShouldRecoverSessionHandles)
+    {
+        TTestBootstrap bootstrap("fs", "client");
+        auto ctx = MakeIntrusive<TCallContext>();
+
+        ui64 handle = bootstrap.CreateHandle(RootNodeId, "file", TCreateHandleArgs::CREATE).GetHandle();
+        auto data = bootstrap.ReadData(handle, 0, 100).GetBuffer();
+        UNIT_ASSERT_VALUES_EQUAL(data.size(), 0);
+
+        data = "aaaabbbbcccccdddddeeee";
+        bootstrap.WriteData(handle, 0, data);
+
+        auto buffer = bootstrap.ReadData(handle, 0, 100).GetBuffer();
+        UNIT_ASSERT_VALUES_EQUAL(buffer, data);
+
+        TTestBootstrap other(bootstrap.Cwd);
+
+        auto id = other.CreateSession("fs", "client", "", false, 0, true)
+                      .GetSession()
+                      .GetSessionId();
+        other.Headers.SessionId = id;
+        UNIT_ASSERT_VALUES_EQUAL(
+            bootstrap.Headers.SessionId,
+            other.Headers.SessionId);
+
+        buffer = other.ReadData(handle, 0, 100).GetBuffer();
+        UNIT_ASSERT_VALUES_EQUAL(buffer, data);
     }
 
     Y_UNIT_TEST(ShouldCreateFileNode)
