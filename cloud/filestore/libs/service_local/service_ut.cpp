@@ -286,12 +286,15 @@ struct TTestBootstrap
 
     static constexpr pid_t DefaultPid = 123;
 
-    TTestBootstrap(const TTempDirectoryPtr& cwd = std::make_shared<TTempDirectory>())
+    TTestBootstrap(
+            const TTempDirectoryPtr& cwd = std::make_shared<TTempDirectory>(),
+            ui32 maxInodeCount = 1000,
+            ui32 maxHandlePerSessionCount = 100)
         : Cwd(cwd)
     {
         AIOService->Start();
         Store = CreateLocalFileStore(
-            CreateConfig(),
+            CreateConfig(maxInodeCount, maxHandlePerSessionCount),
             Timer,
             Scheduler,
             Logging,
@@ -300,12 +303,17 @@ struct TTestBootstrap
         Store->Start();
     }
 
-    TTestBootstrap(const TString& id, const TString& client = "client", const TString& session = {})
+    TTestBootstrap(
+            const TString& id,
+            const TString& client = "client",
+            const TString& session = {},
+            ui32 maxInodeCount = 1000,
+            ui32 maxHandlePerSessionCount = 100)
         : Cwd(std::make_shared<TTempDirectory>())
     {
         AIOService->Start();
         Store = CreateLocalFileStore(
-            CreateConfig(),
+            CreateConfig(maxInodeCount, maxHandlePerSessionCount),
             Timer,
             Scheduler,
             Logging,
@@ -324,13 +332,15 @@ struct TTestBootstrap
         AIOService->Stop();
     }
 
-    TLocalFileStoreConfigPtr CreateConfig()
+    TLocalFileStoreConfigPtr CreateConfig(
+        ui32 maxInodeCount,
+        ui32 maxHandlePerSessionCount)
     {
         NProto::TLocalServiceConfig config;
         config.SetRootPath(Cwd->GetName());
         config.SetStatePath(Cwd->GetName());
-        config.SetMaxInodeCount(1000);
-        config.SetMaxHandlePerSessionCount(100);
+        config.SetMaxInodeCount(maxInodeCount);
+        config.SetMaxHandlePerSessionCount(maxHandlePerSessionCount);
 
         return std::make_shared<TLocalFileStoreConfig>(config);
     }
@@ -900,10 +910,35 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
         TTestBootstrap bootstrap("fs", "client");
         auto ctx = MakeIntrusive<TCallContext>();
 
-        auto dirPath1 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/d/e");
-        auto file1 = CreateFile(bootstrap, dirPath1.back(), "file1", 0755);
-        auto dirPath2 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/f/g");
-        auto file2 = CreateFile(bootstrap, dirPath2.back(), "file2", 0555);
+        TVector<std::pair<TString, TVector<TString>>> testPaths = {
+            {"a/b/c/d/e", {"file1", "file2", "file3"}},
+            {"a/b/c/f/g", {"file4", "file5", "file6"}},
+        };
+
+        TVector<std::tuple<TVector<ui64>, TVector<ui64>, TVector<ui64>>> testNodes;
+
+        for (auto& [dir, files]: testPaths) {
+            auto dirNodes = CreateDirectories(bootstrap, RootNodeId, dir);
+            TVector<ui64> fileNodes;
+            for (auto& file: files) {
+                auto fileNode = CreateFile(bootstrap, dirNodes.back(), file, 0755);
+                fileNodes.push_back(fileNode);
+            }
+
+            TVector<ui64> deletedNodes;
+            deletedNodes.push_back(CreateFile(bootstrap, dirNodes.back(), "deletedFile", 0755));
+            deletedNodes.push_back(CreateDirectory(bootstrap, dirNodes.back(), "deletedDir", 0755));
+
+            testNodes.emplace_back(std::move(dirNodes), std::move(fileNodes), std::move(deletedNodes));
+        }
+
+        // delete nodes after all files/directories were created so nodes won't be reused
+        // then we can safely check that delete nodes were not recovered
+        for (auto& nodes: testNodes) {
+            auto& dirNodes = std::get<0>(nodes);
+            bootstrap.UnlinkNode(dirNodes.back(), "deletedFile", false);
+            bootstrap.UnlinkNode(dirNodes.back(), "deletedDir", true);
+        }
 
         TTestBootstrap other(bootstrap.Cwd);
 
@@ -911,64 +946,31 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
                       .GetSession()
                       .GetSessionId();
         other.Headers.SessionId = id;
-        UNIT_ASSERT_VALUES_EQUAL(bootstrap.Headers.SessionId, other.Headers.SessionId);
+        UNIT_ASSERT_VALUES_EQUAL(other.Headers.SessionId, other.Headers.SessionId);
 
+        for (ui32 testIndex = 0; testIndex < testPaths.size(); testIndex++) {
+            auto& dir = testPaths[testIndex].first;
+            auto& dirNodes = std::get<0>(testNodes[testIndex]);
+            auto& files = testPaths[testIndex].second;
+            auto& fileNodes = std::get<1>(testNodes[testIndex]);
+            auto& deletedNodes = std::get<2>(testNodes[testIndex]);
 
-        CheckDirectoryPath(other, RootNodeId, "a/b/c/d/e", dirPath1);
+            CheckDirectoryPath(other, RootNodeId, dir, dirNodes);
 
-        auto nodes = ListNames(other, dirPath1.back());
-        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 1);
-        UNIT_ASSERT_VALUES_EQUAL(nodes[0], "file1");
+            auto listedFiles = ListNames(other, dirNodes.back());
+            Sort(listedFiles);
+            UNIT_ASSERT_VALUES_EQUAL(listedFiles, files);
 
-        auto stat = bootstrap.GetNodeAttr(dirPath1.back(), "file1").GetNode();
-        UNIT_ASSERT_VALUES_EQUAL(file1, stat.GetId());
+            for (ui32 fileIndex = 0; fileIndex < files.size(); fileIndex++) {
+                auto stat = other.GetNodeAttr(dirNodes.back(), files[fileIndex]).GetNode();
+                UNIT_ASSERT_VALUES_EQUAL(fileNodes[fileIndex], stat.GetId());
+            }
 
-
-        CheckDirectoryPath(other, RootNodeId, "a/b/c/f/g", dirPath2);
-
-        nodes = ListNames(other, dirPath2.back());
-        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 1);
-        UNIT_ASSERT_VALUES_EQUAL(nodes[0], "file2");
-
-        stat = bootstrap.GetNodeAttr(dirPath2.back(), "file2").GetNode();
-        UNIT_ASSERT_VALUES_EQUAL(file2, stat.GetId());
-    }
-
-    Y_UNIT_TEST(ShouldNotRecoverUnlinkedFsNodes)
-    {
-        TTestBootstrap bootstrap("fs", "client");
-        auto ctx = MakeIntrusive<TCallContext>();
-
-        auto dirPath1 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/d/e");
-        CreateFile(bootstrap, dirPath1.back(), "file1", 0755);
-        auto dirPath2 = CreateDirectories(bootstrap, RootNodeId, "a/b/c/f/g");
-        CreateFile(bootstrap, dirPath2.back(), "file2", 0555);
-
-        // rm a/b/c/d/e/file1
-        bootstrap.UnlinkNode(dirPath1.back(), "file1", false);
-        // rm a/b/c/f/g/file2
-        bootstrap.UnlinkNode(dirPath2.back(), "file2", false);
-        // rmdir a/b/c/f/g
-        bootstrap.UnlinkNode(dirPath2[dirPath2.size()-2], "g", true);
-        dirPath2.pop_back();
-
-        TTestBootstrap other(bootstrap.Cwd);
-
-        auto id = other.CreateSession("fs", "client", "", false, 0, true)
-                      .GetSession()
-                      .GetSessionId();
-        other.Headers.SessionId = id;
-        UNIT_ASSERT_VALUES_EQUAL(
-            bootstrap.Headers.SessionId,
-            other.Headers.SessionId);
-
-        CheckDirectoryPath(other, RootNodeId, "a/b/c/d/e", dirPath1);
-        auto nodes = ListNames(other, dirPath1.back());
-        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 0);
-
-        CheckDirectoryPath(other, RootNodeId, "a/b/c/f", dirPath2);
-        nodes = ListNames(other, dirPath2.back());
-        UNIT_ASSERT_VALUES_EQUAL(nodes.size(), 0);
+            for (auto& deletedNode: deletedNodes) {
+                auto response = other.AssertGetNodeAttrFailed(deletedNode);
+                UNIT_ASSERT_VALUES_EQUAL(E_FS_NOENT, response.GetError().GetCode());
+            }
+        }
     }
 
     Y_UNIT_TEST(ShouldRecoverSessionHandles)
@@ -976,15 +978,30 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
         TTestBootstrap bootstrap("fs", "client");
         auto ctx = MakeIntrusive<TCallContext>();
 
-        ui64 handle = bootstrap.CreateHandle(RootNodeId, "file", TCreateHandleArgs::CREATE).GetHandle();
-        auto data = bootstrap.ReadData(handle, 0, 100).GetBuffer();
-        UNIT_ASSERT_VALUES_EQUAL(data.size(), 0);
+        TVector<TString> files = {"file1", "file2", "file3", "file4", "file5"};
+        TVector<ui64> handles;
+        TString expectedData = "aaaabbbbcccccdddddeeee";
 
-        data = "aaaabbbbcccccdddddeeee";
-        bootstrap.WriteData(handle, 0, data);
+        for (auto& file: files) {
+            auto handle = bootstrap.CreateHandle(RootNodeId, file, TCreateHandleArgs::CREATE).GetHandle();
 
-        auto buffer = bootstrap.ReadData(handle, 0, 100).GetBuffer();
-        UNIT_ASSERT_VALUES_EQUAL(buffer, data);
+            auto data = bootstrap.ReadData(handle, 0, 100).GetBuffer();
+            UNIT_ASSERT_VALUES_EQUAL(data.size(), 0);
+            handles.push_back(handle);
+
+            data = expectedData;
+            bootstrap.WriteData(handle, 0, data);
+
+            auto buffer = bootstrap.ReadData(handle, 0, 100).GetBuffer();
+            UNIT_ASSERT_VALUES_EQUAL(buffer, data);
+        }
+
+        // close half of the handles
+        for (ui32 i = 0; i < handles.size(); i++) {
+            if (i % 2 == 0) {
+                bootstrap.DestroyHandle(handles[i]);
+            }
+        }
 
         TTestBootstrap other(bootstrap.Cwd);
 
@@ -996,8 +1013,17 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
             bootstrap.Headers.SessionId,
             other.Headers.SessionId);
 
-        buffer = other.ReadData(handle, 0, 100).GetBuffer();
-        UNIT_ASSERT_VALUES_EQUAL(buffer, data);
+        for (ui32 i = 0; i < handles.size(); i++) {
+            if (i % 2 == 0) {
+                // check closed handles
+                auto response = other.AssertReadDataFailed(handles[i], 0, 100);
+                UNIT_ASSERT_VALUES_EQUAL(E_FS_BADHANDLE, response.GetError().GetCode());
+            } else {
+                // check open handles
+                auto buffer = other.ReadData(handles[i], 0, 100).GetBuffer();
+                UNIT_ASSERT_VALUES_EQUAL(buffer, expectedData);
+            }
+        }
     }
 
     Y_UNIT_TEST(ShouldCreateFileNode)
