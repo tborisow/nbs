@@ -1026,6 +1026,55 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
         }
     }
 
+    Y_UNIT_TEST(ShouldLimitNumberOfNodesAndHandles)
+    {
+        constexpr ui32 maxHandles = 4;
+        constexpr ui32 maxNodes = maxHandles + 2;
+
+        TTestBootstrap bootstrap("fs", "client", {}, maxNodes, maxHandles);
+
+        TVector<ui64> nodes;
+        TVector<ui64> handles;
+        for (ui32 i = 0; i < maxNodes+1; i++) {
+            auto fileName = ToString(i);
+            if (i >= maxNodes) {
+                auto response = bootstrap.AssertCreateNodeFailed(
+                    TCreateNodeArgs::File(RootNodeId, fileName, 0755));
+                UNIT_ASSERT_VALUES_EQUAL(
+                    E_FS_NOSPC,
+                    response.GetError().GetCode());
+                continue;
+            }
+
+            auto node = CreateFile(bootstrap, RootNodeId, fileName, 0755);
+            nodes.push_back(node);
+
+            if (i < maxHandles) {
+                auto handle = bootstrap.CreateHandle(node, "", TCreateHandleArgs::RDNLY).GetHandle();
+                handles.push_back(handle);
+            } else {
+                auto response = bootstrap.AssertCreateHandleFailed(
+                    node,
+                    "",
+                    TCreateHandleArgs::RDNLY);
+                UNIT_ASSERT_VALUES_EQUAL(
+                    E_FS_NOSPC,
+                    response.GetError().GetCode());
+            }
+        }
+
+        UNIT_ASSERT_VALUES_EQUAL(maxNodes, nodes.size());
+        UNIT_ASSERT_VALUES_EQUAL(maxHandles, handles.size());
+
+        // make sure that after deleting node it's poissible to create node once again
+        bootstrap.UnlinkNode(RootNodeId, "0", false);
+        CreateFile(bootstrap, RootNodeId, "100", 0755);
+
+        // make sure that after closing handle it's poissible to open handle once again
+        bootstrap.DestroyHandle(handles[0]);
+        bootstrap.CreateHandle(nodes[1], "", TCreateHandleArgs::RDNLY).GetHandle();
+    }
+
     Y_UNIT_TEST(ShouldCreateFileNode)
     {
         TTestBootstrap bootstrap("fs");
