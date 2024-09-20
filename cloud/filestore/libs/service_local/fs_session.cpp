@@ -164,6 +164,8 @@ void TLocalFileSystem::RemoveSession(
         SessionsList.erase(it->second);
         SessionsById.erase(it);
     }
+
+    session->StatePath.ForceDelete();
 }
 
 void TLocalFileSystem::ScheduleCleanupSessions()

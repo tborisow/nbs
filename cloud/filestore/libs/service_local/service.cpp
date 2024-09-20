@@ -444,8 +444,13 @@ NProto::TDestroyFileStoreResponse TLocalFileStore::DestroyFileStore(
             << "invalid file system: " << id.Quote());
     }
 
-    TFsPath path = Concat(Config->GetRootPath(), Config->GetPathPrefix() + id);
+    const TString& name = Config->GetPathPrefix() + id;
+
+    TFsPath path = Concat(Config->GetRootPath(), name);
     path.ForceDelete();
+
+    TFsPath statePath = Concat(Config->GetStatePath(), ".state_" + name);
+    statePath.ForceDelete();
 
     FileSystems.erase(it);
 

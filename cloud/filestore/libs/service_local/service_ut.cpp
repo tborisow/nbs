@@ -332,6 +332,39 @@ struct TTestBootstrap
         AIOService->Stop();
     }
 
+    std::optional<TFsPath> GetFsStateDir(const TString& id)
+    {
+        TVector<TFsPath> dirs;
+        Cwd->List(dirs);
+
+        for (auto& d: dirs) {
+            if (d.IsDirectory() && d.GetName().StartsWith(".state") && d.GetName().EndsWith(id)) {
+                return d;
+            }
+        }
+
+        return {};
+    }
+
+    std::optional<TFsPath> GetClientFsStateDir(const TString& id, const TString& client = "client")
+    {
+        auto fsStateDir = GetFsStateDir(id);
+        if (!fsStateDir) {
+            return {};
+        }
+
+        TVector<TFsPath> dirs;
+        fsStateDir->List(dirs);
+
+        for (auto& d: dirs) {
+            if (d.IsDirectory() && d.GetName().StartsWith("client_") && d.GetName().EndsWith(client)) {
+                return d;
+            }
+        }
+
+        return {};
+    }
+
     TLocalFileStoreConfigPtr CreateConfig(
         ui32 maxInodeCount,
         ui32 maxHandlePerSessionCount)
@@ -839,6 +872,7 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
     {
         TTestBootstrap bootstrap;
         bootstrap.CreateFileStore("fs", "cloud", "folder", 100500, 500100);
+        UNIT_ASSERT(bootstrap.GetFsStateDir("fs"));
 
         auto response = bootstrap.CreateSession("fs", "client", "");
         auto id = response.GetSession().GetSessionId();
@@ -861,6 +895,8 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
 
         // restore
         bootstrap.CreateSession("fs", "client", id);
+        UNIT_ASSERT(bootstrap.GetClientFsStateDir("fs", "client"));
+
         bootstrap.AssertCreateSessionFailed("fs", "client-xxx", id);
 
         bootstrap.SwitchToSession(session);
@@ -874,6 +910,7 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
 
         bootstrap.SwitchToSession(session);
         bootstrap.DestroySession();
+        UNIT_ASSERT(!bootstrap.GetClientFsStateDir("fs", "client"));
     }
 
     Y_UNIT_TEST(ShouldNotCreateTheSameStore)
@@ -885,7 +922,11 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
     Y_UNIT_TEST(ShouldDestroyStore)
     {
         TTestBootstrap bootstrap("fs");
+        UNIT_ASSERT(bootstrap.GetFsStateDir("fs"));
+
         bootstrap.DestroyFileStore("fs");
+        UNIT_ASSERT(!bootstrap.GetFsStateDir("fs"));
+
         // intentionally
         bootstrap.DestroyFileStore("fs");
     }
