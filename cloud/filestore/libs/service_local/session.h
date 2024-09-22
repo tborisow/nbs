@@ -80,11 +80,11 @@ public:
 
     void Init(bool restoreClientSession, ui32 maxHandlesPerSessionCount)
     {
-        auto sessionIdPath = StatePath / "session";
         auto handlesPath = StatePath / "handles";
 
-        if (!restoreClientSession || !sessionIdPath.Exists()) {
-            sessionIdPath.DeleteIfExists();
+        if (!restoreClientSession || !HasStateFile("session") || !HasStateFile("fuse_state")) {
+            DeleteStateFile("session");
+            DeleteStateFile("fuse_state");
             handlesPath.DeleteIfExists();
 
             SessionId = CreateGuidAsString();
@@ -94,13 +94,12 @@ public:
                 ", SessionId=" << SessionId <<
                 ", MaxHandlesPerSessionCount=" << maxHandlesPerSessionCount);
 
-            TFsPath tmpFilePath(MakeTempName(nullptr, "session"));
-            TFileOutput(tmpFilePath).Write(SessionId);
-            tmpFilePath.ForceRenameTo(sessionIdPath);
-
+            WriteStateFile("session", SessionId);
+            WriteStateFile("fuse_state", "");
         } else {
-            TFile file(sessionIdPath, EOpenModeFlag::OpenExisting | EOpenModeFlag::RdOnly);
-            SessionId = TFileInput(file).ReadAll();
+            SessionId = ReadStateFile("session");
+            FuseState = ReadStateFile("fuse_state");
+
             STORAGE_INFO(
                 "Restore existing session, StatePath=" << StatePath <<
                 ", SessionId=" << SessionId <<
@@ -235,7 +234,16 @@ public:
 
     void ResetState(TString state)
     {
+        TWriteGuard guard(Lock);
+
+        for (auto& [_, handle]: Handles) {
+            HandlesTable->DeleteRecord(handle.RecordIndex);
+        }
+
+        Handles.clear();
+
         FuseState = std::move(state);
+        WriteStateFile("fuse_state", FuseState);
     }
 
     void AddSubSession(ui64 seqNo, bool readOnly)
@@ -264,6 +272,33 @@ public:
                 return ts < deadline;
             });
         return SubSessions.empty();
+    }
+
+private:
+
+    TString ReadStateFile(const TString &fileName)
+    {
+        TFile file(
+            StatePath / fileName,
+            EOpenModeFlag::OpenExisting | EOpenModeFlag::RdOnly);
+        return TFileInput(file).ReadAll();
+    }
+
+    void WriteStateFile(const TString &fileName, const TString& value)
+    {
+        TFsPath tmpFilePath(MakeTempName(nullptr, fileName.c_str()));
+        TFileOutput(tmpFilePath).Write(value);
+        tmpFilePath.ForceRenameTo(StatePath / fileName);
+    }
+
+    bool HasStateFile(const TString &fileName)
+    {
+        return (StatePath / fileName).Exists();
+    }
+
+    void DeleteStateFile(const TString &fileName)
+    {
+        return (StatePath / fileName).DeleteIfExists();
     }
 };
 

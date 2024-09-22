@@ -987,7 +987,7 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
                       .GetSession()
                       .GetSessionId();
         other.Headers.SessionId = id;
-        UNIT_ASSERT_VALUES_EQUAL(other.Headers.SessionId, other.Headers.SessionId);
+        UNIT_ASSERT_VALUES_EQUAL(bootstrap.Headers.SessionId, other.Headers.SessionId);
 
         for (ui32 testIndex = 0; testIndex < testPaths.size(); testIndex++) {
             auto& dir = testPaths[testIndex].first;
@@ -1575,6 +1575,16 @@ Y_UNIT_TEST_SUITE(LocalFileStore)
 
         auto response = bootstrap.CreateSession("fs", "client", "", true);
         UNIT_ASSERT_VALUES_EQUAL(response.GetSession().GetSessionState(), state);
+
+        TTestBootstrap other(bootstrap.Cwd);
+
+        auto otherResponse =
+            other.CreateSession("fs", "client", "", false, 0, true);
+        UNIT_ASSERT_VALUES_EQUAL(otherResponse.GetSession().GetSessionState(), state);
+
+        UNIT_ASSERT_VALUES_EQUAL(
+            response.GetSession().GetSessionId(),
+            otherResponse.GetSession().GetSessionId());
     }
 
     Y_UNIT_TEST(ShouldSupportMigration)
