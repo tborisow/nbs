@@ -2,6 +2,7 @@
 
 #include "lowlevel.h"
 
+#include <cloud/storage/core/libs/common/aligned_string.h>
 #include <cloud/storage/core/libs/common/file_io_service.h>
 
 #include <util/string/builder.h>
@@ -94,18 +95,26 @@ TFuture<NProto::TReadDataResponse> TLocalFileSystem::ReadDataAsync(
             TErrorResponse(ErrorInvalidHandle(request.GetHandle())));
     }
 
-    auto b = TString::Uninitialized(request.GetLength());
+    auto [b, alignOffset] = AlignedString(
+        request.GetLength(),
+        Config->GetDirectIoEnabled() ? Config->GetDirectIoAlign() : 0);
     NSan::Unpoison(b.Data(), b.Size());
 
-    TArrayRef<char> data(b.begin(), b.vend());
+    TArrayRef<char> data(
+        b.begin() + alignOffset,
+        b.begin() + request.GetLength() + alignOffset);
     auto promise = NewPromise<NProto::TReadDataResponse>();
     FileIOService->AsyncRead(*handle, request.GetOffset(), data).Subscribe(
-        [b = std::move(b), promise] (const TFuture<ui32>& f) mutable {
+        [b = std::move(b), alignOffset, promise] (const TFuture<ui32>& f) mutable {
             NProto::TReadDataResponse response;
             try {
                 auto bytesRead = f.GetValue();
-                b.resize(bytesRead);
+                b.resize(bytesRead + alignOffset);
                 response.SetBuffer(std::move(b));
+                response.SetAlignOffset(alignOffset);
+            } catch (const TServiceError& e) {
+                *response.MutableError() = MakeError(MAKE_FILESTORE_ERROR(
+                    ErrnoToFileStoreError(STATUS_FROM_CODE(e.GetCode()))));
             } catch (...) {
                 *response.MutableError() =
                     MakeError(E_IO, CurrentExceptionMessage());
@@ -128,13 +137,16 @@ TFuture<NProto::TWriteDataResponse> TLocalFileSystem::WriteDataAsync(
     }
 
     auto b = std::move(*request.MutableBuffer());
-    TArrayRef<char> data(b.begin(), b.vend());
+    TArrayRef<char> data(b.begin() + request.GetAlignOffset(), b.vend());
     auto promise = NewPromise<NProto::TWriteDataResponse>();
     FileIOService->AsyncWrite(*handle, request.GetOffset(), data).Subscribe(
         [b = std::move(b), promise] (const TFuture<ui32>& f) mutable {
             NProto::TWriteDataResponse response;
             try {
                 f.GetValue();
+            } catch (const TServiceError& e) {
+                *response.MutableError() = MakeError(MAKE_FILESTORE_ERROR(
+                    ErrnoToFileStoreError(STATUS_FROM_CODE(e.GetCode()))));
             } catch (...) {
                 *response.MutableError() =
                     MakeError(E_IO, CurrentExceptionMessage());
