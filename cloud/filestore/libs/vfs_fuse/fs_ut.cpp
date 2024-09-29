@@ -1560,13 +1560,90 @@ Y_UNIT_TEST_SUITE(TFileSystemTest)
         UNIT_ASSERT_VALUES_EQUAL(1, static_cast<int>(*errorCounter));
     }
 
-    Y_UNIT_TEST(ShouldHandleReadWriteWithDirectIo)
+    Y_UNIT_TEST(ShouldHandleReadDataLocalRequest)
     {
         NProto::TFileStoreFeatures features;
         features.SetLocalIoEnabled(true);
         features.SetDirectIoEnabled(true);
         auto scheduler = std::make_shared<TTestScheduler>();
         TBootstrap bootstrap(CreateWallClockTimer(), scheduler, features);
+
+        const ui64 nodeId = 123;
+        const ui64 handleId = 456;
+        const ui64 size = 789;
+
+        bootstrap.Service->ReadDataLocalHandler = [&] (auto callContext, auto request) {
+            UNIT_ASSERT_VALUES_EQUAL(FileSystemId, callContext->FileSystemId);
+            UNIT_ASSERT_VALUES_EQUAL(request->GetHandle(), handleId);
+
+            NProto::TReadDataResponse result;
+            result.MutableBuffer()->assign(TString(request->GetLength(), 'a'));
+
+            return MakeFuture(result);
+        };
+
+        bootstrap.Service->ReadDataHandler = [&] (auto callContext, auto request) {
+            Y_UNUSED(callContext);
+            Y_UNUSED(request);
+
+            UNIT_ASSERT_C(
+                false,
+                "ReadDataHandler should not be called");
+
+            return MakeFuture(NProto::TReadDataResponse());
+        };
+
+        bootstrap.Start();
+
+        auto read = bootstrap.Fuse->SendRequest<TReadRequest>(
+            nodeId, handleId, 0, size);
+
+        UNIT_ASSERT(read.Wait(WaitTimeout));
+        UNIT_ASSERT_VALUES_EQUAL(read.GetValue(), size);
+
+        read = bootstrap.Fuse->SendRequest<TReadRequest>(
+            nodeId, handleId, 0, 10_MB);
+
+        UNIT_ASSERT_EXCEPTION(read.GetValueSync(), yexception);
+    }
+
+    Y_UNIT_TEST(ShouldHandleWriteDataLocalRequest)
+    {
+        NProto::TFileStoreFeatures features;
+        features.SetLocalIoEnabled(true);
+        features.SetDirectIoEnabled(true);
+        auto scheduler = std::make_shared<TTestScheduler>();
+        TBootstrap bootstrap(CreateWallClockTimer(), scheduler, features);
+
+        const ui64 nodeId = 123;
+        const ui64 handleId = 456;
+        const ui64 size = 789;
+
+        bootstrap.Service->WriteDataLocalHandler = [&] (auto callContext, auto request) {
+            UNIT_ASSERT_VALUES_EQUAL(FileSystemId, callContext->FileSystemId);
+            UNIT_ASSERT_VALUES_EQUAL(request->GetHandle(), handleId);
+            UNIT_ASSERT_VALUES_EQUAL(request->GetBuffer().size(), size);
+
+            return MakeFuture(NProto::TWriteDataResponse());
+        };
+
+        bootstrap.Service->WriteDataHandler = [&] (auto callContext, auto request) {
+            Y_UNUSED(callContext);
+            Y_UNUSED(request);
+
+            UNIT_ASSERT_C(
+                false,
+                "WriteDataHandler should not be called");
+
+            return MakeFuture(NProto::TWriteDataResponse());
+        };
+
+        bootstrap.Start();
+
+        auto write = bootstrap.Fuse->SendRequest<TWriteRequest>(
+            nodeId, handleId, 0, CreateBuffer(size, 'a'));
+        UNIT_ASSERT_NO_EXCEPTION(write.GetValue(WaitTimeout));
+
     }
 }
 

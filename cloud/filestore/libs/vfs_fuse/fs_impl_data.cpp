@@ -159,6 +159,10 @@ void TFileSystem::Read(
     off_t offset,
     fuse_file_info* fi)
 {
+    if (Config->GetLocalIoEnabled()) {
+        return ReadLocal(std::move(callContext), req, ino, size, offset, fi);
+    }
+
     STORAGE_DEBUG("Read #" << ino << " @" << fi->fh
         << " offset:" << offset
         << " size:" << size);
@@ -182,15 +186,63 @@ void TFileSystem::Read(
     callContext->Unaligned = !IsAligned(offset, Config->GetBlockSize())
         || !IsAligned(size, Config->GetBlockSize());
 
-    if (Config->GetLocalIoEnabled()) {
-        return;
-    }
     auto request = StartRequest<NProto::TReadDataRequest>(ino);
     request->SetHandle(fi->fh);
     request->SetOffset(offset);
     request->SetLength(size);
 
     Session->ReadData(callContext, std::move(request))
+        .Subscribe([=, ptr = weak_from_this()] (const auto& future) {
+            const auto& response = future.GetValue();
+            if (auto self = ptr.lock(); CheckResponse(self, *callContext, req, response)) {
+                const auto& buffer = response.GetBuffer();
+                self->ReplyBuf(
+                    *callContext,
+                    response.GetError(),
+                    req,
+                    buffer.data(),
+                    buffer.size());
+            }
+        });
+}
+
+void TFileSystem::ReadLocal(
+    TCallContextPtr callContext,
+    fuse_req_t req,
+    fuse_ino_t ino,
+    size_t size,
+    off_t offset,
+    fuse_file_info* fi)
+{
+    STORAGE_DEBUG("ReadLocal #" << ino << " @" << fi->fh
+        << " offset:" << offset
+        << " size:" << size);
+
+    if (size > Config->GetMaxBufferSize()) {
+        ReplyError(
+            *callContext,
+            MakeError(
+                E_FS_INVAL,
+                TStringBuilder() << "Read size " << size
+                    << " is greater than max buffer size " << Config->GetMaxBufferSize()),
+            req,
+            EINVAL);
+        return;
+    }
+
+    if (!ValidateNodeId(*callContext, req, ino)) {
+        return;
+    }
+
+    callContext->Unaligned = !IsAligned(offset, Config->GetBlockSize())
+        || !IsAligned(size, Config->GetBlockSize());
+
+    auto request = StartRequest<NProto::TReadDataLocalRequest>(ino);
+    request->SetHandle(fi->fh);
+    request->SetOffset(offset);
+    request->SetLength(size);
+
+    Session->ReadDataLocal(callContext, std::move(request))
         .Subscribe([=, ptr = weak_from_this()] (const auto& future) {
             const auto& response = future.GetValue();
             if (auto self = ptr.lock(); CheckResponse(self, *callContext, req, response)) {
@@ -213,6 +265,10 @@ void TFileSystem::Write(
     off_t offset,
     fuse_file_info* fi)
 {
+    if (Config->GetLocalIoEnabled()) {
+        return WriteLocal(std::move(callContext), req, ino, buffer, offset, fi);
+    }
+
     STORAGE_DEBUG("Write #" << ino << " @" << fi->fh
         << " offset:" << offset
         << " size:" << buffer.size());
@@ -250,6 +306,51 @@ void TFileSystem::Write(
         });
 }
 
+void TFileSystem::WriteLocal(
+    TCallContextPtr callContext,
+    fuse_req_t req,
+    fuse_ino_t ino,
+    TStringBuf buffer,
+    off_t offset,
+    fuse_file_info* fi)
+{
+    STORAGE_DEBUG("WriteLocal #" << ino << " @" << fi->fh
+        << " offset:" << offset
+        << " size:" << buffer.size());
+
+    if (!ValidateNodeId(*callContext, req, ino)) {
+        return;
+    }
+
+    callContext->Unaligned = !IsAligned(offset, Config->GetBlockSize())
+        || !IsAligned(buffer.size(), Config->GetBlockSize());
+
+    auto request = StartRequest<NProto::TWriteDataLocalRequest>(ino);
+    request->SetHandle(fi->fh);
+    request->SetOffset(offset);
+    request->SetBuffer(buffer.data(), buffer.size());
+
+    const auto handle = fi->fh;
+    const auto reqId = callContext->RequestId;
+    FSyncQueue.Enqueue(reqId, TNodeId {ino}, THandle {handle});
+
+    Session->WriteDataLocal(callContext, std::move(request))
+        .Subscribe([=, size = buffer.size(), ptr = weak_from_this()] (const auto& future) {
+            auto self = ptr.lock();
+            if (!self) {
+                return;
+            }
+
+            const auto& response = future.GetValue();
+            const auto& error = response.GetError();
+            self->FSyncQueue.Dequeue(reqId, error, TNodeId {ino}, THandle {handle});
+
+            if (CheckResponse(self, *callContext, req, response)) {
+                self->ReplyWrite(*callContext, error, req, size);
+            }
+        });
+}
+
 void TFileSystem::WriteBuf(
     TCallContextPtr callContext,
     fuse_req_t req,
@@ -258,6 +359,10 @@ void TFileSystem::WriteBuf(
     off_t offset,
     fuse_file_info* fi)
 {
+    if (Config->GetLocalIoEnabled()) {
+        return WriteBufLocal(std::move(callContext), req, ino, bufv, offset, fi);
+    }
+
     size_t size = fuse_buf_size(bufv);
     STORAGE_DEBUG("WriteBuf #" << ino << " @" << fi->fh
         << " offset:" << offset
@@ -297,6 +402,69 @@ void TFileSystem::WriteBuf(
     FSyncQueue.Enqueue(reqId, TNodeId {ino}, THandle {handle});
 
     Session->WriteData(callContext, std::move(request))
+        .Subscribe([=, ptr = weak_from_this()] (const auto& future) {
+            auto self = ptr.lock();
+            if (!self) {
+                return;
+            }
+
+            const auto& response = future.GetValue();
+            const auto& error = response.GetError();
+            self->FSyncQueue.Dequeue(reqId, error, TNodeId {ino}, THandle {handle});
+
+            if (CheckResponse(self, *callContext, req, response)) {
+                self->ReplyWrite(*callContext, error, req, size);
+            }
+        });
+}
+
+void TFileSystem::WriteBufLocal(
+    TCallContextPtr callContext,
+    fuse_req_t req,
+    fuse_ino_t ino,
+    fuse_bufvec* bufv,
+    off_t offset,
+    fuse_file_info* fi)
+{
+    size_t size = fuse_buf_size(bufv);
+    STORAGE_DEBUG("WriteBufLocal #" << ino << " @" << fi->fh
+        << " offset:" << offset
+        << " size:" << size);
+
+    if (!ValidateNodeId(*callContext, req, ino)) {
+        return;
+    }
+
+    auto buffer = TString::Uninitialized(size);
+
+    fuse_bufvec dst = FUSE_BUFVEC_INIT(size);
+    dst.buf[0].mem = (void*)buffer.data();
+
+    ssize_t res = fuse_buf_copy(
+        &dst, bufv
+#if !defined(FUSE_VIRTIO)
+        ,fuse_buf_copy_flags(0)
+#endif
+    );
+    if (res < 0) {
+        ReplyError(*callContext, MakeError(res), req, res);
+        return;
+    }
+    Y_ABORT_UNLESS((size_t)res == size);
+
+    callContext->Unaligned = !IsAligned(offset, Config->GetBlockSize())
+        || !IsAligned(buffer.size(), Config->GetBlockSize());
+
+    auto request = StartRequest<NProto::TWriteDataLocalRequest>(ino);
+    request->SetHandle(fi->fh);
+    request->SetOffset(offset);
+    request->SetBuffer(std::move(buffer));
+
+    const auto handle = fi->fh;
+    const auto reqId = callContext->RequestId;
+    FSyncQueue.Enqueue(reqId, TNodeId {ino}, THandle {handle});
+
+    Session->WriteDataLocal(callContext, std::move(request))
         .Subscribe([=, ptr = weak_from_this()] (const auto& future) {
             auto self = ptr.lock();
             if (!self) {
