@@ -71,6 +71,10 @@ NProto::TCreateSessionResponse TLocalFileSystem::CreateSession(
     NProto::TCreateSessionResponse response;
     session->GetInfo(*response.MutableSession(), sessionSeqNo);
 
+    auto* features = response.MutableFileStore()->MutableFeatures();
+    features->SetLocalIoEnabled(true);
+    features->SetDirectIoEnabled(true);
+
     return response;
 }
 

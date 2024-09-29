@@ -66,6 +66,8 @@ namespace NCloud::NFileStore {
 #define FILESTORE_DATA_METHODS_LOCAL_ASYNC(xxx, ...)                           \
     xxx(ReadData,                           __VA_ARGS__)                       \
     xxx(WriteData,                          __VA_ARGS__)                       \
+    xxx(ReadDataLocal,                      __VA_ARGS__)                       \
+    xxx(WriteDataLocal,                     __VA_ARGS__)                       \
 // FILESTORE_DATA_METHODS_LOCAL_ASYNC
 
 #define FILESTORE_SERVICE_LOCAL_SYNC(xxx, ...)                                 \

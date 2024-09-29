@@ -91,7 +91,9 @@ NProto::TError MakeGrpcError(const grpc::Status& status)
 #define FILESTORE_DECLARE_METHOD_STREAM(name, ...) \
     FILESTORE_DECLARE_METHOD(name##Stream, name, name##Stream, __VA_ARGS__)
 
-FILESTORE_SERVICE(FILESTORE_DECLARE_METHOD_FS)
+FILESTORE_REMOTE_SERVICE(FILESTORE_DECLARE_METHOD_FS)
+FILESTORE_DECLARE_METHOD_FS(Fsync)
+FILESTORE_DECLARE_METHOD_FS(FsyncDir)
 FILESTORE_ENDPOINT_SERVICE(FILESTORE_DECLARE_METHOD_VHOST)
 FILESTORE_DECLARE_METHOD_STREAM(GetSessionEvents)
 
@@ -815,9 +817,35 @@ public:
     }                                                                          \
 // FILESTORE_IMPLEMENT_METHOD
 
-    FILESTORE_SERVICE(FILESTORE_IMPLEMENT_METHOD)
+    FILESTORE_REMOTE_SERVICE(FILESTORE_IMPLEMENT_METHOD)
+    FILESTORE_IMPLEMENT_METHOD(Fsync)
+    FILESTORE_IMPLEMENT_METHOD(FsyncDir)
 
 #undef FILESTORE_IMPLEMENT_METHOD
+
+    TFuture<NProto::TReadDataLocalResponse> ReadDataLocal(
+        TCallContextPtr callContext,
+        std::shared_ptr<NProto::TReadDataLocalRequest> request) override
+    {
+        Y_UNUSED(callContext);
+        Y_UNUSED(request);
+        return MakeFuture<NProto::TReadDataLocalResponse>(
+                        TErrorResponse(
+                            E_NOT_IMPLEMENTED,
+                            "client doesn't implement ReadDataLocal"));
+    }
+
+    TFuture<NProto::TWriteDataLocalResponse> WriteDataLocal(
+        TCallContextPtr callContext,
+        std::shared_ptr<NProto::TWriteDataLocalRequest> request) override
+    {
+        Y_UNUSED(callContext);
+        Y_UNUSED(request);
+        return MakeFuture<NProto::TWriteDataLocalResponse>(
+                        TErrorResponse(
+                            E_NOT_IMPLEMENTED,
+                            "client doesn't implement WriteDataLocal"));
+    }
 
     void GetSessionEventsStream(
         TCallContextPtr callContext,

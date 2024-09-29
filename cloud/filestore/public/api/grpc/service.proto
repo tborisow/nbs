@@ -339,6 +339,7 @@ service TFileStoreService
         };
     }
 
+
     rpc AllocateData(TAllocateDataRequest) returns (TAllocateDataResponse) {
         option (google.api.http) = {
             post: "/allocate_data"

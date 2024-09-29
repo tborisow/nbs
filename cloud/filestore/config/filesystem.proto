@@ -42,4 +42,10 @@ message TFileSystemConfig
 
     // Period of processing create/destroy handle requests.
     optional uint32 AsyncHandleOperationPeriod = 12;
+
+    // Enable passing buffers without copy
+    optional bool LocalIoEnabled = 13;
+
+    // Enable opening files with O_DIRECT
+    optional bool DirectIoEnabled = 14;
 }

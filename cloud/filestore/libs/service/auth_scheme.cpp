@@ -26,6 +26,7 @@ TPermissionList GetRequestPermissions(EFileStoreRequest requestType)
         case EFileStoreRequest::GetNodeXAttr:
         case EFileStoreRequest::ListNodeXAttr:
         case EFileStoreRequest::ReadData:
+        case EFileStoreRequest::ReadDataLocal:
         case EFileStoreRequest::TestLock:
         case EFileStoreRequest::DescribeData:
         case EFileStoreRequest::ReadBlob:
@@ -41,6 +42,7 @@ TPermissionList GetRequestPermissions(EFileStoreRequest requestType)
         case EFileStoreRequest::CreateHandle:
         case EFileStoreRequest::DestroyHandle:
         case EFileStoreRequest::WriteData:
+        case EFileStoreRequest::WriteDataLocal:
         case EFileStoreRequest::AllocateData:
         case EFileStoreRequest::AcquireLock:
         case EFileStoreRequest::ReleaseLock:

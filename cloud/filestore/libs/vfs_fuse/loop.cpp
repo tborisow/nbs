@@ -726,6 +726,7 @@ private:
                 return response.GetError();
             }
 
+            STORAGE_INFO("xxx1 " << DumpMessage(response));
             const auto& filestore = response.GetFileStore();
             ui64 rawMedia = filestore.GetStorageMediaKind();
             if (!NProto::EStorageMediaKind_IsValid(rawMedia)) {
@@ -816,6 +817,7 @@ private:
 
     TFileSystemConfigPtr MakeFileSystemConfig(const NProto::TFileStore& filestore)
     {
+        STORAGE_INFO("xxx2 " << DumpMessage(filestore));
         NProto::TFileSystemConfig config;
         config.SetFileSystemId(filestore.GetFileSystemId());
         config.SetBlockSize(filestore.GetBlockSize());
@@ -839,10 +841,15 @@ private:
         if (features.GetAttrTimeout()) {
             config.SetAttrTimeout(features.GetAttrTimeout());
         }
+
         config.SetAsyncDestroyHandleEnabled(
             features.GetAsyncDestroyHandleEnabled());
         config.SetAsyncHandleOperationPeriod(
             features.GetAsyncHandleOperationPeriod());
+
+        config.SetLocalIoEnabled(features.GetLocalIoEnabled());
+        config.SetDirectIoEnabled(features.GetDirectIoEnabled());
+
         return std::make_shared<TFileSystemConfig>(config);
     }
 

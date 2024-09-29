@@ -145,6 +145,69 @@ TFuture<NProto::TWriteDataResponse> TLocalFileSystem::WriteDataAsync(
     return promise;
 }
 
+TFuture<NProto::TReadDataLocalResponse> TLocalFileSystem::ReadDataLocalAsync(
+    NProto::TReadDataLocalRequest& request)
+{
+    STORAGE_TRACE("ReadDataLocal " << DumpMessage(request));
+
+    auto session = GetSession(request);
+    auto* handle = session->LookupHandle(request.GetHandle());
+    if (!handle || !handle->IsOpen()) {
+        return MakeFuture<NProto::TReadDataLocalResponse>(
+            TErrorResponse(ErrorInvalidHandle(request.GetHandle())));
+    }
+
+    auto b = TString::Uninitialized(request.GetLength());
+    NSan::Unpoison(b.Data(), b.Size());
+
+    TArrayRef<char> data(b.begin(), b.vend());
+    auto promise = NewPromise<NProto::TReadDataLocalResponse>();
+    FileIOService->AsyncRead(*handle, request.GetOffset(), data).Subscribe(
+        [b = std::move(b), promise] (const TFuture<ui32>& f) mutable {
+            NProto::TReadDataLocalResponse response;
+            try {
+                auto bytesRead = f.GetValue();
+                b.resize(bytesRead);
+                response.SetBuffer(std::move(b));
+            } catch (...) {
+                *response.MutableError() =
+                    MakeError(E_IO, CurrentExceptionMessage());
+            }
+            promise.SetValue(std::move(response));
+        });
+    return promise;
+}
+
+TFuture<NProto::TWriteDataLocalResponse> TLocalFileSystem::WriteDataLocalAsync(
+    NProto::TWriteDataLocalRequest& request)
+{
+    STORAGE_TRACE("WriteDataLocal " << DumpMessage(request));
+
+    auto session = GetSession(request);
+    auto* handle = session->LookupHandle(request.GetHandle());
+    if (!handle || !handle->IsOpen()) {
+        return MakeFuture<NProto::TWriteDataLocalResponse>(
+            TErrorResponse(ErrorInvalidHandle(request.GetHandle())));
+    }
+
+    auto b = std::move(*request.MutableBuffer());
+    TArrayRef<char> data(b.begin(), b.vend());
+    auto promise = NewPromise<NProto::TWriteDataLocalResponse>();
+    FileIOService->AsyncWrite(*handle, request.GetOffset(), data).Subscribe(
+        [b = std::move(b), promise] (const TFuture<ui32>& f) mutable {
+            NProto::TWriteDataLocalResponse response;
+            try {
+                f.GetValue();
+            } catch (...) {
+                *response.MutableError() =
+                    MakeError(E_IO, CurrentExceptionMessage());
+            }
+            promise.SetValue(std::move(response));
+        });
+
+    return promise;
+}
+
 NProto::TAllocateDataResponse TLocalFileSystem::AllocateData(
     const NProto::TAllocateDataRequest& request)
 {

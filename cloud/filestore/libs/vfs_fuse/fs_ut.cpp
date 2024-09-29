@@ -1559,6 +1559,15 @@ Y_UNIT_TEST_SUITE(TFileSystemTest)
 
         UNIT_ASSERT_VALUES_EQUAL(1, static_cast<int>(*errorCounter));
     }
+
+    Y_UNIT_TEST(ShouldHandleReadWriteWithDirectIo)
+    {
+        NProto::TFileStoreFeatures features;
+        features.SetLocalIoEnabled(true);
+        features.SetDirectIoEnabled(true);
+        auto scheduler = std::make_shared<TTestScheduler>();
+        TBootstrap bootstrap(CreateWallClockTimer(), scheduler, features);
+    }
 }
 
 }   // namespace NCloud::NFileStore::NFuse

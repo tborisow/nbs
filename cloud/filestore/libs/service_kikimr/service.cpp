@@ -331,6 +331,32 @@ private:
         response.SetValue(TFsyncDirMethod::TResponse());
     }
 
+    template<>
+    void ExecuteRequest<TReadDataLocalMethod>(
+        TCallContextPtr callContext,
+        std::shared_ptr<TReadDataLocalMethod::TRequest> request,
+        TPromise<TReadDataLocalMethod::TResponse> response)
+    {
+        Y_UNUSED(callContext);
+        Y_UNUSED(request);
+        Y_UNUSED(TReadDataLocalMethod::RequestName);
+
+        response.SetValue(TReadDataLocalMethod::TResponse());
+    }
+
+    template<>
+    void ExecuteRequest<TWriteDataLocalMethod>(
+        TCallContextPtr callContext,
+        std::shared_ptr<TWriteDataLocalMethod::TRequest> request,
+        TPromise<TWriteDataLocalMethod::TResponse> response)
+    {
+        Y_UNUSED(callContext);
+        Y_UNUSED(request);
+        Y_UNUSED(TWriteDataLocalMethod::RequestName);
+
+        response.SetValue(TWriteDataLocalMethod::TResponse());
+    }
+
     template <typename T>
     void ExecuteStreamRequest(
         TCallContextPtr callContext,

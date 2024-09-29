@@ -182,6 +182,9 @@ void TFileSystem::Read(
     callContext->Unaligned = !IsAligned(offset, Config->GetBlockSize())
         || !IsAligned(size, Config->GetBlockSize());
 
+    if (Config->GetLocalIoEnabled()) {
+        return;
+    }
     auto request = StartRequest<NProto::TReadDataRequest>(ino);
     request->SetHandle(fi->fh);
     request->SetOffset(offset);

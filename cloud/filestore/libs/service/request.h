@@ -75,6 +75,8 @@ namespace NCloud::NFileStore {
 #define FILESTORE_LOCAL_DATA_METHODS(xxx, ...)                                 \
     xxx(Fsync,                              __VA_ARGS__)                       \
     xxx(FsyncDir,                           __VA_ARGS__)                       \
+    xxx(ReadDataLocal,                      __VA_ARGS__)                       \
+    xxx(WriteDataLocal,                     __VA_ARGS__)                       \
 // FILESTORE_LOCAL_DATA_METHODS
 
 #define FILESTORE_DATA_SERVICE(xxx, ...)                                       \

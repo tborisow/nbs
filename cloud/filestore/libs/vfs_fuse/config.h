@@ -39,6 +39,9 @@ public:
     bool GetAsyncDestroyHandleEnabled() const;
     TDuration GetAsyncHandleOperationPeriod() const;
 
+    bool GetLocalIoEnabled() const;
+    bool GetDirectIoEnabled() const;
+
     void Dump(IOutputStream& out) const;
     void DumpHtml(IOutputStream& out) const;
 };

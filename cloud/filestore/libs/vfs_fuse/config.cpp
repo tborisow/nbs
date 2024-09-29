@@ -29,6 +29,9 @@ namespace {
                                                                                \
     xxx(AsyncDestroyHandleEnabled,  bool,       false                         )\
     xxx(AsyncHandleOperationPeriod, TDuration,  TDuration::MilliSeconds(50)   )\
+                                                                               \
+    xxx(LocalIoEnabled,             bool,       false                         )\
+    xxx(DirectIoEnabled,            bool,       false                         )\
 // FILESTORE_FUSE_CONFIG
 
 #define FILESTORE_FILESYSTEM_DECLARE_CONFIG(name, type, value)                 \

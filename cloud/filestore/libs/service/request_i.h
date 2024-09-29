@@ -22,6 +22,28 @@
 
 namespace NCloud::NFileStore {
 
+namespace NProto {
+
+////////////////////////////////////////////////////////////////////////////////
+
+struct TReadDataLocalRequest
+    : public TReadDataRequest
+{
+};
+
+using TReadDataLocalResponse = TReadDataResponse;
+
+////////////////////////////////////////////////////////////////////////////////
+
+struct TWriteDataLocalRequest
+    : public TWriteDataRequest
+{
+};
+
+using TWriteDataLocalResponse = TWriteDataResponse;
+
+}   // namespace NProto
+
 namespace NImpl {
 
 ////////////////////////////////////////////////////////////////////////////////
