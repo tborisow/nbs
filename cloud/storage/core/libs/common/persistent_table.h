@@ -25,7 +25,7 @@ private:
         H Data;
     };
 
-    enum class ERecordState : ui8
+    enum class ERecordState: ui8
     {
         Free = 0,
         Allocated,
@@ -59,10 +59,12 @@ public:
         using pointer = R*;
         using reference = R&;
 
-        TIterator(TPersistentTable* table, ui64 index)
+        TIterator(TPersistentTable& table, ui64 index)
             : Index(index)
             , Table(table)
-        {}
+        {
+            SkipEmptyRecords();
+        }
 
         bool operator==(const TIterator& other) const
         {
@@ -77,11 +79,7 @@ public:
         TIterator& operator++()
         {
             ++Index;
-            while (Index < Table->RecordCount &&
-                   Table->RecordsPtr[Index].State != ERecordState::Stored)
-            {
-                ++Index;
-            }
+            SkipEmptyRecords();
             return *this;
         }
 
@@ -94,12 +92,12 @@ public:
 
         R& operator*()
         {
-            return Table->RecordsPtr[Index].Data;
+            return Table.RecordsPtr[Index].Data;
         }
 
         R* operator->()
         {
-            return &Table->RecordsPtr[Index].Data;
+            return &Table.RecordsPtr[Index].Data;
         }
 
         ui64 GetIndex() const
@@ -108,24 +106,28 @@ public:
         }
 
     private:
+        void SkipEmptyRecords()
+        {
+            while (Index < Table.RecordCount &&
+                   Table.RecordsPtr[Index].State != ERecordState::Stored)
+            {
+                ++Index;
+            }
+        }
+
+    private:
         ui64 Index;
-        TPersistentTable* Table;
+        TPersistentTable& Table;
     };
 
     TIterator begin()
     {
-        ui64 index = 0;
-        while (index < RecordCount &&
-               RecordsPtr[index].State != ERecordState::Stored)
-        {
-            ++index;
-        }
-        return TIterator(this, index);
+        return TIterator(*this, 0);
     }
 
     TIterator end()
     {
-        return TIterator(this, RecordCount);
+        return TIterator(*this, RecordCount);
     }
 
 public:
