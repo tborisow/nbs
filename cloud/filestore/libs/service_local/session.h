@@ -34,7 +34,7 @@ private:
     struct THandle
     {
         TFileHandle FileHandle;
-        ui64 RecordIndex;
+        ui64 RecordIndex = -1;
     };
 
     struct THandleTableHeader
@@ -43,9 +43,9 @@ private:
 
     struct THandleTableRecord
     {
-        ui64 HandleId;
-        ui64 NodeId;
-        int Flags;
+        ui64 HandleId = 0;
+        ui64 NodeId = 0;
+        int Flags = 0;
     };
 
     using THandleTable = TPersistentTable<THandleTableHeader, THandleTableRecord>;
@@ -275,7 +275,6 @@ public:
     }
 
 private:
-
     TString ReadStateFile(const TString &fileName)
     {
         TFile file(
