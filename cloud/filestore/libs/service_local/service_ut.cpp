@@ -288,13 +288,13 @@ struct TTestBootstrap
 
     TTestBootstrap(
             const TTempDirectoryPtr& cwd = std::make_shared<TTempDirectory>(),
-            ui32 maxInodeCount = 1000,
+            ui32 maxNodeCount = 1000,
             ui32 maxHandlePerSessionCount = 100)
         : Cwd(cwd)
     {
         AIOService->Start();
         Store = CreateLocalFileStore(
-            CreateConfig(maxInodeCount, maxHandlePerSessionCount),
+            CreateConfig(maxNodeCount, maxHandlePerSessionCount),
             Timer,
             Scheduler,
             Logging,
@@ -307,13 +307,13 @@ struct TTestBootstrap
             const TString& id,
             const TString& client = "client",
             const TString& session = {},
-            ui32 maxInodeCount = 1000,
+            ui32 maxNodeCount = 1000,
             ui32 maxHandlePerSessionCount = 100)
         : Cwd(std::make_shared<TTempDirectory>())
     {
         AIOService->Start();
         Store = CreateLocalFileStore(
-            CreateConfig(maxInodeCount, maxHandlePerSessionCount),
+            CreateConfig(maxNodeCount, maxHandlePerSessionCount),
             Timer,
             Scheduler,
             Logging,
@@ -366,13 +366,13 @@ struct TTestBootstrap
     }
 
     TLocalFileStoreConfigPtr CreateConfig(
-        ui32 maxInodeCount,
+        ui32 maxNodeCount,
         ui32 maxHandlePerSessionCount)
     {
         NProto::TLocalServiceConfig config;
         config.SetRootPath(Cwd->GetName());
         config.SetStatePath(Cwd->GetName());
-        config.SetMaxInodeCount(maxInodeCount);
+        config.SetMaxNodeCount(maxNodeCount);
         config.SetMaxHandlePerSessionCount(maxHandlePerSessionCount);
 
         return std::make_shared<TLocalFileStoreConfig>(config);

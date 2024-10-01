@@ -25,8 +25,7 @@ class TIndexNode
 private:
     const ui64 NodeId;
     const TFileHandle NodeFd;
-    ui64 RecordIndex;
-    ui64 TableIndex;
+    ui64 RecordIndex = -1;
 
 public:
     TIndexNode(ui64 nodeId, TFileHandle node)
@@ -124,8 +123,8 @@ private:
 
     struct TNodeTableRecord
     {
-        ui64 NodeId;
-        ui64 ParentNodeId;
+        ui64 NodeId = 0;
+        ui64 ParentNodeId = 0;
         char Name[NAME_MAX + 1];
     };
 
@@ -135,7 +134,7 @@ private:
     using TNodeTable = TPersistentTable<TNodeTableHeader, TNodeTableRecord>;
 
     TNodeMap Nodes;
-    std::unique_ptr<TNodeTable> NodesTable;
+    std::unique_ptr<TNodeTable> NodeTable;
     TRWMutex NodesLock;
     const TLog& Log;
 
@@ -143,11 +142,11 @@ public:
     TLocalIndex(
             const TFsPath& root,
             const TFsPath& statePath,
-            ui32 maxInodeCount,
+            ui32 maxNodeCount,
             const TLog& log)
         : Log(log)
     {
-        Init(root, statePath, maxInodeCount);
+        Init(root, statePath, maxNodeCount);
     }
 
     TIndexNodePtr LookupNode(ui64 nodeId)
@@ -172,12 +171,12 @@ public:
             return true;
         }
 
-        auto recordIndex = NodesTable->AllocRecord();
+        auto recordIndex = NodeTable->AllocRecord();
         if (recordIndex == TNodeTable::InvalidIndex) {
             return false;
         }
 
-        auto* record = NodesTable->RecordData(recordIndex);
+        auto* record = NodeTable->RecordData(recordIndex);
 
         record->NodeId = node->GetNodeId();
         record->ParentNodeId = parentNodeId;
@@ -185,7 +184,7 @@ public:
         std::strncpy(record->Name, name.c_str(), NAME_MAX);
         record->Name[NAME_MAX] = 0;
 
-        NodesTable->StoreRecord(recordIndex);
+        NodeTable->StoreRecord(recordIndex);
 
         node->SetRecordIndex(recordIndex);
         Nodes.emplace(std::move(node));
@@ -201,7 +200,7 @@ public:
         auto it = Nodes.find(nodeId);
         if (it != Nodes.end()) {
             node = *it;
-            NodesTable->DeleteRecord(node->GetRecordIndex());
+            NodeTable->DeleteRecord(node->GetRecordIndex());
             Nodes.erase(it);
         }
 
@@ -209,21 +208,21 @@ public:
     }
 
 private:
-    void Init(const TFsPath& root, const TFsPath& statePath, ui32 maxInodeCount)
+    void Init(const TFsPath& root, const TFsPath& statePath, ui32 maxNodeCount)
     {
         STORAGE_INFO(
             "Init index, Root=" << root <<
             ", StatePath=" << statePath
-            << ", MaxInodeCount=" << maxInodeCount);
+            << ", MaxNodeCount=" << maxNodeCount);
 
         Nodes.insert(TIndexNode::CreateRoot(root));
 
-        NodesTable = std::make_unique<TNodeTable>(
+        NodeTable = std::make_unique<TNodeTable>(
             (statePath / "nodes").GetPath(),
-            maxInodeCount);
+            maxNodeCount);
 
         TMap<ui64, ui64> unresolvedRecords;
-        for (auto it = NodesTable->begin(); it != NodesTable->end(); it++) {
+        for (auto it = NodeTable->begin(); it != NodeTable->end(); it++) {
             unresolvedRecords[it->NodeId] = it.GetIndex();
             STORAGE_TRACE(
                 "Unresolved record, NodeId=" << it->NodeId <<
@@ -237,7 +236,7 @@ private:
 
             while (!unresolvedPath.empty()) {
                 auto pathElemIndex = unresolvedPath.top();
-                auto pathElemRecord = NodesTable->RecordData(pathElemIndex);
+                auto pathElemRecord = NodeTable->RecordData(pathElemIndex);
 
                 STORAGE_TRACE(
                     "Resolve node start, NodeId=" << pathElemRecord->NodeId);
@@ -256,12 +255,12 @@ private:
                         while (!unresolvedPath.empty()) {
                             auto discardedIndex = unresolvedPath.top();
                             auto* discardedRecord =
-                                NodesTable->RecordData(discardedIndex);
+                                NodeTable->RecordData(discardedIndex);
                             STORAGE_WARN(
                                 "Discarding NodeId="
                                 << discardedRecord->NodeId);
                             unresolvedRecords.erase(discardedRecord->NodeId);
-                            NodesTable->DeleteRecord(discardedIndex);
+                            NodeTable->DeleteRecord(discardedIndex);
                             unresolvedPath.pop();
                         }
                         continue;
