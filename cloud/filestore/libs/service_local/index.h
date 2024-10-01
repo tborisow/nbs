@@ -295,7 +295,6 @@ private:
     {
         return value;
     }
-
 };
 
 }   // namespace NCloud::NFileStore

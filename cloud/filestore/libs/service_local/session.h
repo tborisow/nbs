@@ -275,7 +275,6 @@ public:
     }
 
 private:
-
     TString ReadStateFile(const TString &fileName)
     {
         TFile file(
