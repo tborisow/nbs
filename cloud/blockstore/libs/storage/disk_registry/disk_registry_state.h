@@ -1253,10 +1253,6 @@ private:
         TDiskId& affectedDisk,
         TDuration& timeout);
 
-    bool IsChangeDestructive(
-        const NProto::TDeviceConfig& device,
-        const NProto::TDeviceConfig& oldConfig) const;
-
     void ResetMigrationStartTsIfNeeded(TDiskState& disk);
 
     struct TConfigUpdateEffect;
