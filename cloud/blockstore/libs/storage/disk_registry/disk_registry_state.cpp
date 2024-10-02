@@ -715,7 +715,14 @@ void TDiskRegistryState::ProcessDirtyDevices(TVector<TDirtyDevice> dirtyDevices)
 {
     for (auto&& [uuid, diskId]: dirtyDevices) {
         if (!diskId.empty()) {
-            PendingCleanup.Insert(diskId, std::move(uuid));
+            auto error = PendingCleanup.Insert(diskId, std::move(uuid));
+            Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+            if (HasError(error)) {
+                ReportDiskRegistryInsertToPendingCleanupFailed(
+                    TStringBuilder()
+                    << "An error occurred while processing dirty devices: "
+                    << FormatError(error));
+            }
         }
     }
 }
@@ -1320,7 +1327,13 @@ NProto::TError TDiskRegistryState::ReplaceDeviceWithoutDiskStateUpdate(
         UpdatePlacementGroup(db, diskId, disk, "ReplaceDevice");
         UpdateAndReallocateDisk(db, diskId, disk);
 
-        PendingCleanup.Insert(diskId, deviceId);
+        error = PendingCleanup.Insert(diskId, deviceId);
+        Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+        if (HasError(error)) {
+            ReportDiskRegistryInsertToPendingCleanupFailed(
+                TStringBuilder() << "An error occurred while replacing device: "
+                                 << FormatError(error));
+        }
     } catch (const TServiceError& e) {
         return MakeError(e.GetCode(), e.what());
     }
@@ -2708,10 +2721,17 @@ NProto::TError TDiskRegistryState::DeallocateDisk(
 
         for (const auto& affectedDiskId: affectedDisks) {
             Y_DEBUG_ABORT_UNLESS(affectedDiskId.StartsWith(diskId + "/"));
-            PendingCleanup.Insert(
+            error = PendingCleanup.Insert(
                 diskId,
                 DeallocateSimpleDisk(db, affectedDiskId, "DeallocateDisk:Replica")
             );
+            Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+            if (HasError(error)) {
+                ReportDiskRegistryInsertToPendingCleanupFailed(
+                    TStringBuilder()
+                    << "An error occurred while deallocating disk replica: "
+                    << affectedDiskId << ". " << FormatError(error));
+            }
         }
 
         DeleteDisk(db, diskId);
@@ -2720,10 +2740,14 @@ NProto::TError TDiskRegistryState::DeallocateDisk(
         return {};
     }
 
-    PendingCleanup.Insert(
-        diskId,
-        DeallocateSimpleDisk(db, diskId, *disk)
-    );
+    auto error =
+        PendingCleanup.Insert(diskId, DeallocateSimpleDisk(db, diskId, *disk));
+    Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+    if (HasError(error)) {
+        ReportDiskRegistryInsertToPendingCleanupFailed(
+            TStringBuilder() << "An error occurred while deallocating disk: "
+                             << FormatError(error));
+    }
 
     return {};
 }
@@ -4619,7 +4643,14 @@ void TDiskRegistryState::RemoveFinishedMigrations(
 
             DeviceList.ReleaseDevice(m.DeviceId);
             db.UpdateDirtyDevice(m.DeviceId, diskId);
-            PendingCleanup.Insert(diskId, m.DeviceId);
+            auto error = PendingCleanup.Insert(diskId, m.DeviceId);
+            Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+            if (HasError(error)) {
+                ReportDiskRegistryInsertToPendingCleanupFailed(
+                    TStringBuilder()
+                    << "An error occurred while removing finished migrations: "
+                    << FormatError(error));
+            }
 
             return true;
         }
@@ -6562,13 +6593,19 @@ NProto::TError TDiskRegistryState::AllocateDiskReplicas(
         for (ui32 i = 0; i < count; ++i) {
             const size_t idx = masterDisk->ReplicaCount + i + 1;
 
-            PendingCleanup.Insert(
+            auto error = PendingCleanup.Insert(
                 masterDiskId,
                 DeallocateSimpleDisk(
                     db,
                     GetReplicaDiskId(masterDiskId, idx),
-                    "AllocateDiskReplicas:Cleanup")
-            );
+                    "AllocateDiskReplicas:Cleanup"));
+            Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+            if (HasError(error)) {
+                ReportDiskRegistryInsertToPendingCleanupFailed(
+                    TStringBuilder() << "An error occurred while allocated "
+                                        "disk replica cleanup: "
+                                     << FormatError(error));
+            }
         }
     };
 
@@ -6637,10 +6674,17 @@ NProto::TError TDiskRegistryState::DeallocateDiskReplicas(
 
     for (size_t i = masterDisk->ReplicaCount; i >= newReplicaCount + 1; --i) {
         const auto replicaDiskId = GetReplicaDiskId(masterDiskId, i);
-        PendingCleanup.Insert(
+        auto error = PendingCleanup.Insert(
             masterDiskId,
-            DeallocateSimpleDisk(db, replicaDiskId, "DeallocateDiskReplicas")
-        );
+            DeallocateSimpleDisk(db, replicaDiskId, "DeallocateDiskReplicas"));
+        Y_DEBUG_ABORT_UNLESS(!HasError(error), "%s", FormatError(error).c_str());
+        if (HasError(error)) {
+            ReportDiskRegistryInsertToPendingCleanupFailed(
+                TStringBuilder()
+                << "An error occurred while deallocating "
+                   "disk replica: "
+                << replicaDiskId << ". " << FormatError(error));
+        }
 
         // TODO (NBS-3418): update ReplicaTable
     }
