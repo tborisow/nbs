@@ -221,19 +221,33 @@ private:
             (statePath / "nodes").GetPath(),
             maxNodeCount);
 
+        RecoverNodesFromPersistentTable();
+
+    }
+
+    void RecoverNodesFromPersistentTable()
+    {
+        // enties are ordered by NodeId in TMap but this doesn't mean that
+        // a/b/c/d has order a, b, c, d usually inode number increased but
+        // directories can move so directory a which was created later can
+        // contain directory b which was created before so  and NodeId(a) >
+        // NodeId(b) for a/b
         TMap<ui64, ui64> unresolvedRecords;
         for (auto it = NodeTable->begin(); it != NodeTable->end(); it++) {
             unresolvedRecords[it->NodeId] = it.GetIndex();
             STORAGE_TRACE(
-                "Unresolved record, NodeId=" << it->NodeId <<
-                ", ParentNodeId=" << it->ParentNodeId <<
-                ", Name=" << it->Name);
+                "Unresolved record, NodeId=" << it->NodeId << ", ParentNodeId="
+                                             << it->ParentNodeId
+                                             << ", Name=" << it->Name);
         }
 
         while (!unresolvedRecords.empty()) {
             TStack<ui64> unresolvedPath;
             unresolvedPath.push(unresolvedRecords.begin()->second);
 
+            // For entry /a we can resolve immideatly and create TIndexNode
+            // but for entry d in /a/b/c/d path we must resolve the whole path
+            // recursively
             while (!unresolvedPath.empty()) {
                 auto pathElemIndex = unresolvedPath.top();
                 auto pathElemRecord = NodeTable->RecordData(pathElemIndex);
@@ -243,12 +257,18 @@ private:
 
                 auto parentNodeIt = Nodes.find(pathElemRecord->ParentNodeId);
                 if (parentNodeIt == Nodes.end()) {
+                    // parent is not resloved
+
                     STORAGE_TRACE(
                         "Need to resolve parent NodeId="
                         << pathElemRecord->ParentNodeId);
                     auto parentRecordIt =
                         unresolvedRecords.find(pathElemRecord->ParentNodeId);
                     if (parentRecordIt == unresolvedRecords.end()) {
+                        // parent was not saved in persistent table so we can't
+                        // resolve it in cased of d in path /a/b/c/d if we
+                        // discover that b can't be resolved we need to discard
+                        // b, c, d inodes
                         STORAGE_ERROR(
                             "Parent node is missing in table, NodeId="
                             << pathElemRecord->ParentNodeId);
@@ -266,10 +286,13 @@ private:
                         continue;
                     }
 
+                    // add to unresolvedPath and solve recursively
                     unresolvedPath.push(parentRecordIt->second);
                     continue;
                 }
 
+                // parent already resolved so we can create node and resolve
+                // this entry
                 auto node =
                     TIndexNode::Create(**parentNodeIt, pathElemRecord->Name);
                 node->SetRecordIndex(pathElemIndex);

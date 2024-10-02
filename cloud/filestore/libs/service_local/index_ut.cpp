@@ -30,10 +30,16 @@ struct TEnvironment
     }
 
 protected:
-    void CreateNestedDir(
+    bool CreateNestedDir(
         ui32 pathLen,
         TMap<TString, ui64>& nodeMap)
     {
+        RootPath.ForceDelete();
+        RootPath.MkDir();
+
+        StatePath.ForceDelete();
+        StatePath.MkDir();
+
         TLocalIndex index(RootPath, StatePath, pathLen, Log);
 
         auto node = index.LookupNode(RootNodeId);
@@ -56,6 +62,15 @@ protected:
             UNIT_ASSERT_C(inserted, "Failed to insert node: " << name);
 
             nodeMap.emplace(name, childNode->GetNodeId());
+            if (childNode->GetNodeId() <= node->GetNodeId()) {
+                // Rarely inodes reused and not increased when new dir created
+                // in this case we skip the test
+                STORAGE_WARN(
+                    "node id=" <<  node->GetNodeId() <<
+                    " , child node id=" << childNode->GetNodeId());
+                return false;
+            }
+
             UNIT_ASSERT_LT_C(
                 node->GetNodeId(),
                 childNode->GetNodeId(),
@@ -63,9 +78,23 @@ protected:
                 " , child node id=" << childNode->GetNodeId());
             node = childNode;
         }
+        return true;
     }
 
-    void CreateReversedNodeIdNestedDir(
+    void SafeCreateNestedDir(ui32 pathLen, TMap<TString, ui64>& nodeMap)
+    {
+        for (int i = 0; i < 10; i++) {
+            if (CreateNestedDir(pathLen, nodeMap)) {
+                return;
+            }
+            STORAGE_WARN("Failed to create nested dir in iteration #" << i);
+        }
+        UNIT_ASSERT_C(
+            false,
+            "Failed to create nested dir with increasing inode numbers");
+    }
+
+    bool CreateReversedNodeIdNestedDir(
         ui32 pathLen,
         TMap<TString, ui64>& nodeMap)
     {
@@ -101,15 +130,31 @@ protected:
             UNIT_ASSERT_C(inserted, "Failed to insert node: " << name);
 
             nodeMap.emplace(name, childNode->GetNodeId());
-            if (i > 0) {
-                UNIT_ASSERT_GT_C(
-                    node->GetNodeId(),
-                    childNode->GetNodeId(),
+            if (i > 0 && node->GetNodeId() <= childNode->GetNodeId()) {
+                // Rarely inodes reused and not increased when new dir created
+                // in this case we skip the test
+                STORAGE_WARN(
                     "node id=" <<  node->GetNodeId() <<
                     " , child node id=" << childNode->GetNodeId());
+                return false;
             }
             node = childNode;
         }
+
+        return true;
+    }
+
+    void SafeCreateReversedNodeIdNestedDir(ui32 pathLen, TMap<TString, ui64>& nodeMap)
+    {
+        for (int i = 0; i < 10; i++) {
+            if (CreateReversedNodeIdNestedDir(pathLen, nodeMap)) {
+                return;
+            }
+            STORAGE_WARN("Failed to create nested dir in iteration #" << i);
+        }
+        UNIT_ASSERT_C(
+            false,
+            "Failed to create nested dir with decreaing inode numbers");
     }
 
     void CheckNestedDir(ui32 pathLen, const TMap<TString, ui64>& nodeMap)
@@ -140,6 +185,17 @@ protected:
         }
     }
 
+    void CheckMissingNodes(ui32 pathLen, const TVector<ui64>& nodeIds)
+    {
+        TLocalIndex index(RootPath, StatePath, pathLen, Log);
+        auto node = index.LookupNode(RootNodeId);
+        UNIT_ASSERT_C(node, "Failed to lookup root node");
+
+        for (auto& nodeId: nodeIds) {
+            node = index.LookupNode(nodeId);
+            UNIT_ASSERT_C(!node, "Found node id: " << nodeId);
+        }
+    }
 };
 
 struct TNodeTableHeader
@@ -166,7 +222,7 @@ Y_UNIT_TEST_SUITE(TLocalIndex)
         ui32 pathLen = 10;
         TMap<TString, ui64> nodeMap;
 
-        CreateNestedDir(pathLen, nodeMap);
+        SafeCreateNestedDir(pathLen, nodeMap);
         CheckNestedDir(pathLen, nodeMap);
     }
 
@@ -175,9 +231,33 @@ Y_UNIT_TEST_SUITE(TLocalIndex)
         ui32 pathLen = 10;
         TMap<TString, ui64> nodeMap;
 
-        CreateReversedNodeIdNestedDir(pathLen, nodeMap);
+        SafeCreateReversedNodeIdNestedDir(pathLen, nodeMap);
         CheckNestedDir(pathLen, nodeMap);
+    }
 
+    Y_UNIT_TEST_F(ShouldDiscardUnresolvedNodePath, TEnvironment)
+    {
+        ui32 pathLen = 10;
+        TMap<TString, ui64> nodeMap;
+
+        SafeCreateNestedDir(pathLen, nodeMap);
+
+        TNodeTable nodeTable((StatePath / "nodes").GetPath(), pathLen);
+
+        nodeTable.DeleteRecord(pathLen / 2);
+
+        CheckNestedDir(pathLen / 2, nodeMap);
+
+        TVector<ui64> missingNodes;
+        for (ui32 i = pathLen / 2; i < pathLen; i++) {
+            TString name = ToString(i);
+            auto it = nodeMap.find(name);
+            UNIT_ASSERT_C(it != nodeMap.end(), "Node " << name << " not found");
+
+            missingNodes.push_back(it->second);
+        }
+
+        CheckMissingNodes(pathLen, missingNodes);
     }
 };
 
