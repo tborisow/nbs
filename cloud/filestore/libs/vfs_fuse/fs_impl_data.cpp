@@ -45,7 +45,7 @@ void TFileSystem::Create(
     mode_t mode,
     fuse_file_info* fi)
 {
-    auto [flags, unsupported] = SystemFlagsToHandle(fi->flags);
+    const auto [flags, unsupported] = SystemFlagsToHandle(fi->flags);
     STORAGE_DEBUG("Create #" << parent
         << " " << name.Quote()
         << " flags: " << HandleFlagsToString(flags)
@@ -59,9 +59,6 @@ void TFileSystem::Create(
     auto request = StartRequest<NProto::TCreateHandleRequest>(parent);
     request->SetName(std::move(name));
     request->SetMode(mode & ~(S_IFMT));
-    if (!Config->GetDirectIoEnabled()) {
-        flags = RemoveFlag(flags, NProto::TCreateHandleRequest::E_DIRECT);
-    }
     request->SetFlags(flags);
     if (HasFlag(flags, NProto::TCreateHandleRequest::E_CREATE)) {
         SetUserNGroup(*request, fuse_req_ctx(req));
@@ -98,7 +95,7 @@ void TFileSystem::Open(
     fuse_ino_t ino,
     fuse_file_info* fi)
 {
-    auto [flags, unsupported] = SystemFlagsToHandle(fi->flags);
+    const auto [flags, unsupported] = SystemFlagsToHandle(fi->flags);
     STORAGE_DEBUG("Open #" << ino
         << " flags: " << HandleFlagsToString(flags)
         << " unsupported flags: " << unsupported);
@@ -108,9 +105,6 @@ void TFileSystem::Open(
     }
 
     auto request = StartRequest<NProto::TCreateHandleRequest>(ino);
-    if (!Config->GetDirectIoEnabled()) {
-        flags = RemoveFlag(flags, NProto::TCreateHandleRequest::E_DIRECT);
-    }
     request->SetFlags(flags);
 
     Session->CreateHandle(callContext, std::move(request))
