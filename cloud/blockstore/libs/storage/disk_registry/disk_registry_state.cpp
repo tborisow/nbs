@@ -1131,6 +1131,7 @@ TResultOrError<NProto::TDeviceConfig> TDiskRegistryState::AllocateReplacementDev
 
     // replacement device can come from dirty devices list
     db.DeleteDirtyDevice(deviceReplacementId);
+    PendingCleanup.EraseDevice(deviceReplacementId);
 
     // replacement device can come from automatically replaced devices list
     if (IsAutomaticallyReplaced(deviceReplacementId)) {
@@ -1222,6 +1223,20 @@ NProto::TError TDiskRegistryState::ReplaceDeviceWithoutDiskStateUpdate(
         auto [agentPtr, devicePtr] = FindDeviceLocation(deviceId);
         if (!agentPtr || !devicePtr) {
             return MakeError(E_INVALID_STATE, "can't find device");
+        }
+
+        if (!manual && !deviceReplacementId.empty()) {
+            auto cleaningDiskId =
+                PendingCleanup.FindDiskId(deviceReplacementId);
+            if (!cleaningDiskId.empty() && cleaningDiskId != diskId) {
+                return MakeError(
+                    E_ARGUMENT,
+                    TStringBuilder()
+                        << "can't allocate specific device "
+                        << deviceReplacementId.Quote() << " for disk " << diskId
+                        << " since it is in pending cleanup for disk "
+                        << cleaningDiskId);
+            }
         }
 
         const ui64 logicalBlockCount = devicePtr->GetBlockSize() * devicePtr->GetBlocksCount()
@@ -1326,9 +1341,6 @@ NProto::TError TDiskRegistryState::ReplaceDeviceWithoutDiskStateUpdate(
         UpdatePlacementGroup(db, diskId, disk, "ReplaceDevice");
         UpdateAndReallocateDisk(db, diskId, disk);
 
-        if (PendingCleanup.FindDiskId(targetDevice.GetDeviceUUID()) == diskId) {
-            PendingCleanup.EraseDevice(targetDevice.GetDeviceUUID());
-        }
         error = PendingCleanup.Insert(diskId, deviceId);
         if (HasError(error)) {
             ReportDiskRegistryInsertToPendingCleanupFailed(
