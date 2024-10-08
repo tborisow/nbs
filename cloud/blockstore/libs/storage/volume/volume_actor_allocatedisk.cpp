@@ -138,6 +138,31 @@ std::unique_ptr<MessageDifferencer> CreateNodeIdChangeDifferencer()
     return diff;
 }
 
+bool MigrationsAreEqual(
+    const NProto::TVolumeMeta& lhs,
+    const NProto::TVolumeMeta& rhs)
+{
+    auto diff = CreateNodeIdChangeDifferencer();
+    if (!diff) {
+        return false;
+    }
+
+    std::vector<const NProtoBuf::FieldDescriptor*> fields;
+    fields.push_back(
+        NProto::TVolumeMeta::GetDescriptor()->FindFieldByName("Migrations"));
+    fields.push_back(NProto::TVolumeMeta::GetDescriptor()->FindFieldByName(
+        "FreshDeviceIds"));
+    for (const auto* descriptor: fields) {
+        if (!descriptor) {
+            ReportFieldDescriptorNotFound(
+                "Coudn't create migration differencer.");
+            return false;
+        }
+    }
+
+    return diff->CompareWithFields(lhs, rhs, fields, fields);
+}
+
 NProto::TVolumeMeta CreateNewMeta(
     const NProto::TVolumeMeta& oldMeta,
     TTxVolume::TUpdateDevices& args)
@@ -530,10 +555,9 @@ void TVolumeActor::ExecuteUpdateDevices(
 
     TVolumeDatabase db(tx.DB);
     if (!args.LiteReallocation) {
-        // TODO: reset MigrationIndex here and in UpdateVolumeConfig only if our
-        // migration or fresh device lists have changed
-        // NBS-1988
-        newMeta.SetMigrationIndex(0);
+        if (!MigrationsAreEqual(oldMeta, newMeta)) {
+            newMeta.SetMigrationIndex(0);
+        }
 
         TVolumeMetaHistoryItem metaHistoryItem{ctx.Now(), newMeta};
         db.WriteMetaHistory(State->GetMetaHistory().size(), metaHistoryItem);
